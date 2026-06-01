@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 const SUPABASE_URL = "https://dmugffjkrrgndrtbdotm.supabase.co";
@@ -78,9 +78,54 @@ const DOM_COLS=["Folha","Guia","Status"];
 const STATUS_CYCLE=["pendente","andamento","entregue"];
 const STATUS_ICON={"pendente":"⬜","andamento":"🟡","entregue":"✅"};
 
+// Normalização robusta para voz
+function norm(s){
+  return String(s).toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g,"")
+    .replace(/[^a-z0-9 ]/g," ")
+    .replace(/\s+/g," ").trim();
+}
+
+// Match mais tolerante — verifica se palavras-chave da query existem no alvo
+function fuzzyMatch(query,target){
+  const q=norm(query); const t=norm(target);
+  if(t===q||t.includes(q)||q.includes(t)) return true;
+  const words=q.split(" ").filter(w=>w.length>2);
+  if(words.length===0) return false;
+  const matched=words.filter(w=>t.includes(w));
+  return matched.length>=Math.max(1,Math.floor(words.length*0.6));
+}
+
+// Mapeamento de colunas — aceita variações fonéticas
+const COL_MAP={
+  "folha":"Folha","foia":"Folha","foi":"Folha",
+  "darf":"DARF","dar":"DARF","daf":"DARF",
+  "fgts":"FGTS","fts":"FGTS","fgds":"FGTS","efegates":"FGTS",
+  "adiantamento":"Adiantamento","adiant":"Adiantamento","adiantament":"Adiantamento",
+  "reinf":"REINF","rein":"REINF","reif":"REINF",
+  "econs":"eCons","econ":"eCons","e cons":"eCons","e cones":"eCons","icons":"eCons",
+};
+
+function findCol(txt){
+  for(const[k,v] of Object.entries(COL_MAP)){
+    if(txt.includes(k)) return v;
+  }
+  return null;
+}
+
+function findEmpresa(txt, lista){
+  let best=null; let bestScore=0;
+  for(const emp of lista){
+    const e=norm(emp); const t=norm(txt);
+    if(t.includes(e)){return emp;}
+    const words=e.split(" ").filter(w=>w.length>2);
+    const score=words.filter(w=>t.includes(w)).length/Math.max(words.length,1);
+    if(score>bestScore&&score>=0.5){bestScore=score;best=emp;}
+  }
+  return best;
+}
+
 function getCurrentMonthKey(){const n=new Date();return`${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}`;}
-function normalizeStr(s){return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9 ]/g," ").trim();}
-function fuzzyMatch(query,target){const q=normalizeStr(query);const t=normalizeStr(target);if(t.includes(q)||q.includes(t))return true;const qw=q.split(" ").filter(x=>x.length>2);return qw.length>0&&qw.every(w=>t.includes(w));}
 
 const today=new Date();today.setHours(0,0,0,0);
 const todayStr=today.toISOString().split("T")[0];
@@ -118,187 +163,148 @@ export default function App(){
   const [fechaView,setFechaView]=useState("folha");
   const [listening,setListening]=useState(false);
   const [voiceLog,setVoiceLog]=useState("");
-  const [fechaData,setFechaData]=useState({});
+  const [fechaMap,setFechaMap]=useState({});
   const [fechaLoading,setFechaLoading]=useState(false);
   const recognitionRef=useRef(null);
   const monthKey=getCurrentMonthKey();
   const emptyForm={title:"",category:"dp",priority:"media",due:todayStr,client:"",notes:"",created_at:todayStr,completed_at:""};
   const [form,setForm]=useState(emptyForm);
 
-  useEffect(()=>{fetchTasks();fetchFechamento();},[]);
+  useEffect(()=>{fetchTasks();},[]);
+  useEffect(()=>{ if(view==="fechamento") fetchFechamento(); },[view]);
 
-  // ── TAREFAS ──
   async function fetchTasks(){
     setLoading(true);
     const{data}=await supabase.from("tasks").select("*").order("due",{ascending:true});
     setTasks(data||[]);setLoading(false);
   }
 
-  // ── FECHAMENTO — SUPABASE ──
+  // FECHAMENTO — busca e monta mapa { "tipo|empresa|coluna": {status,via,data_entrega,id} }
   async function fetchFechamento(){
     setFechaLoading(true);
-    const{data}=await supabase.from("fechamento_mensal").select("*").eq("month_key",monthKey);
+    const{data,error}=await supabase.from("fechamento_mensal").select("*").eq("month_key",monthKey);
+    if(error){showToast("Erro ao carregar fechamento","err");setFechaLoading(false);return;}
     const map={};
     (data||[]).forEach(r=>{
-      if(!map[r.tipo])map[r.tipo]={};
-      if(!map[r.tipo][r.empresa])map[r.tipo][r.empresa]={};
-      map[r.tipo][r.empresa][r.coluna]={status:r.status,via:r.via,data_entrega:r.data_entrega,id:r.id};
+      const key=`${r.tipo}|${r.empresa}|${r.coluna}`;
+      map[key]={status:r.status,via:r.via||"",data_entrega:r.data_entrega||"",id:r.id};
     });
-    setFechaData(map);
+    setFechaMap(map);
     setFechaLoading(false);
   }
 
-  async function upsertFecha(tipo,empresa,coluna,status,via="",data_entrega=""){
-    const existing=fechaData?.[tipo]?.[empresa]?.[coluna];
-    const payload={month_key:monthKey,tipo,empresa,coluna,status,via,data_entrega,updated_at:new Date().toISOString()};
-    if(existing?.id){
-      await supabase.from("fechamento_mensal").update(payload).eq("id",existing.id);
-    } else {
-      await supabase.from("fechamento_mensal").insert([payload]);
-    }
-    await fetchFechamento();
+  function getCell(tipo,empresa,coluna){
+    return fechaMap[`${tipo}|${empresa}|${coluna}`]||{status:"pendente",via:"",data_entrega:"",id:null};
   }
 
-  function getFechaCell(tipo,empresa,coluna){
-    return fechaData?.[tipo]?.[empresa]?.[coluna]||{status:"pendente",via:"",data_entrega:""};
+  async function upsertCell(tipo,empresa,coluna,status,via="",data_entrega=""){
+    const existing=getCell(tipo,empresa,coluna);
+    const payload={month_key:monthKey,tipo,empresa,coluna,status,via,data_entrega,updated_at:new Date().toISOString()};
+    let error;
+    if(existing.id){
+      ({error}=await supabase.from("fechamento_mensal").update(payload).eq("id",existing.id));
+    } else {
+      ({error}=await supabase.from("fechamento_mensal").insert([payload]));
+    }
+    if(error){showToast("Erro ao salvar","err");return;}
+    // Atualiza mapa local imediatamente sem precisar rebuscar
+    setFechaMap(prev=>({...prev,[`${tipo}|${empresa}|${coluna}`]:{...payload,id:existing.id||"new"}}));
   }
 
   async function cycleFolhaStatus(empresa,col){
-    const cell=getFechaCell("folha",empresa,col);
+    const cell=getCell("folha",empresa,col);
     const next=STATUS_CYCLE[(STATUS_CYCLE.indexOf(cell.status)+1)%STATUS_CYCLE.length];
     const data_entrega=next==="entregue"?new Date().toLocaleDateString("pt-BR"):"";
-    await upsertFecha("folha",empresa,col,next,cell.via||"",data_entrega);
+    await upsertCell("folha",empresa,col,next,cell.via,data_entrega);
   }
 
   async function setFolhaVia(empresa,col,via){
-    const cell=getFechaCell("folha",empresa,col);
-    await upsertFecha("folha",empresa,col,cell.status,via,cell.data_entrega||"");
+    const cell=getCell("folha",empresa,col);
+    await upsertCell("folha",empresa,col,cell.status,via,cell.data_entrega);
   }
 
   async function cycleDomStatus(empresa,col){
-    const cell=getFechaCell("dom",empresa,col);
+    const cell=getCell("dom",empresa,col);
     const next=STATUS_CYCLE[(STATUS_CYCLE.indexOf(cell.status)+1)%STATUS_CYCLE.length];
-    await upsertFecha("dom",empresa,col,next,"","");
+    await upsertCell("dom",empresa,col,next,"","");
   }
 
   async function toggleSem(empresa){
-    const cell=getFechaCell("sem",empresa,"conferido");
+    const cell=getCell("sem",empresa,"conferido");
     const next=cell.status==="entregue"?"pendente":"entregue";
-    await upsertFecha("sem",empresa,"conferido",next,"","");
+    await upsertCell("sem",empresa,"conferido",next,"","");
   }
 
   async function resetFechamento(){
+    if(!window.confirm("Resetar painel e começar novo ciclo?"))return;
     await supabase.from("fechamento_mensal").delete().eq("month_key",monthKey);
-    await fetchFechamento();
-    showToast("Painel resetado para novo ciclo!");
+    setFechaMap({});
+    showToast("Painel resetado!");
   }
 
-  // ── VOZ MELHORADA ──
+  // VOZ — processa todos os resultados alternativos
   function startVoice(){
-    const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(!SpeechRecognition){showToast("Use o Google Chrome para comando de voz","err");return;}
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(!SR){showToast("Use o Google Chrome para comando de voz","err");return;}
     if(recognitionRef.current){try{recognitionRef.current.stop();}catch(e){}}
-    const r=new SpeechRecognition();
-    r.lang="pt-BR";
-    r.continuous=false;
-    r.interimResults=false;
-    r.maxAlternatives=3;
-    r.onstart=()=>{setListening(true);setVoiceLog("Ouvindo... fale o comando agora");};
+    const r=new SR();
+    r.lang="pt-BR";r.continuous=false;r.interimResults=false;r.maxAlternatives=5;
+    r.onstart=()=>{setListening(true);setVoiceLog("🎤 Ouvindo...");};
     r.onend=()=>setListening(false);
     r.onerror=(e)=>{
       setListening(false);
-      if(e.error==="not-allowed")showToast("Permita o microfone nas configurações do navegador","err");
+      if(e.error==="not-allowed")showToast("❌ Permita o microfone no navegador","err");
       else if(e.error==="no-speech")showToast("Nenhuma fala detectada. Tente novamente.","err");
       else showToast(`Erro: ${e.error}`,"err");
     };
     r.onresult=(e)=>{
-      const results=Array.from(e.results[0]).map(r=>r.transcript.toLowerCase());
-      setVoiceLog(`Entendido: "${results[0]}"`);
-      let matched=false;
-      for(const txt of results){
-        if(processVoiceCommand(txt)){matched=true;break;}
+      const alternativas=Array.from(e.results[0]).map(x=>x.transcript);
+      setVoiceLog(`Entendido: "${alternativas[0]}"`);
+      let ok=false;
+      for(const txt of alternativas){
+        if(processVoice(norm(txt))){ok=true;break;}
       }
-      if(!matched)showToast(`Não entendi. Tente: "Marcar [empresa] folha entregue"`,"err");
+      if(!ok) showToast(`❌ Não entendi: "${alternativas[0]}"\nTente: "Marcar AutoBraz folha entregue"`,"err");
     };
     recognitionRef.current=r;
     try{r.start();}catch(e){showToast("Erro ao iniciar microfone","err");}
   }
 
-  function processVoiceCommand(txt){
-    const colMap={folha:"Folha",darf:"DARF",fgts:"FGTS",adiantamento:"Adiantamento",reinf:"REINF",econs:"eCons",econ:"eCons","e cons":"eCons"};
-    let matched=false;
+  function processVoice(txt){
+    const hoje=new Date().toLocaleDateString("pt-BR");
+    const isWhats=txt.includes("whats")||txt.includes("zap");
+    const isEmail=txt.includes("email")||txt.includes("e-mail")||txt.includes("e mail")||txt.includes("correio");
+    const via=isWhats?"WhatsApp":isEmail?"E-mail":"";
 
     // "tudo entregue"
-    const tudoMatch=txt.match(/(.+?)\s+tudo\s+entregue/);
-    if(tudoMatch){
-      const q=tudoMatch[1].trim();
-      FOLHA_ATIVA.forEach(async emp=>{
-        if(fuzzyMatch(q,emp)){
-          for(const col of FOLHA_COLS){
-            await upsertFecha("folha",emp,col,"entregue","",new Date().toLocaleDateString("pt-BR"));
-          }
-          showToast(`✅ ${emp} — tudo entregue!`);
-          matched=true;
-        }
-      });
-    }
-
-    // "via whatsapp ou email"
-    const viaMatch=txt.match(/(.+?)\s+(folha|darf|fgts|adiantamento|reinf|econs?|e cons)\s+(whatsapp|whats|email|e-mail|e mail)/);
-    if(!matched&&viaMatch){
-      const q=viaMatch[1].trim();
-      const colRaw=viaMatch[2].replace(" ","");
-      const viaRaw=viaMatch[3];
-      const col=colMap[colRaw]||null;
-      const via=viaRaw.includes("whats")?"WhatsApp":"E-mail";
-      if(col){
-        FOLHA_ATIVA.forEach(async emp=>{
-          if(fuzzyMatch(q,emp)){
-            await upsertFecha("folha",emp,col,"entregue",via,new Date().toLocaleDateString("pt-BR"));
-            showToast(`✅ ${emp} — ${col} via ${via}`);
-            matched=true;
-          }
-        });
+    if(txt.includes("tudo")){
+      const emp=findEmpresa(txt.replace("tudo","").replace("entregue",""),FOLHA_ATIVA);
+      if(emp){
+        FOLHA_COLS.forEach(col=>upsertCell("folha",emp,col,"entregue",via,hoje));
+        showToast(`✅ ${emp} — tudo entregue!`);
+        return true;
       }
     }
 
-    // "marcar X coluna entregue"
-    const marcarMatch=txt.match(/marcar\s+(.+?)\s+(folha|darf|fgts|adiantamento|reinf|econs?|e cons)\s+entregue/);
-    if(!matched&&marcarMatch){
-      const q=marcarMatch[1].trim();
-      const colRaw=marcarMatch[2].replace(" ","");
-      const col=colMap[colRaw]||null;
-      if(col){
-        FOLHA_ATIVA.forEach(async emp=>{
-          if(fuzzyMatch(q,emp)){
-            await upsertFecha("folha",emp,col,"entregue","",new Date().toLocaleDateString("pt-BR"));
-            showToast(`✅ ${emp} — ${col} entregue`);
-            matched=true;
-          }
-        });
+    // detectar coluna
+    const col=findCol(txt);
+    if(col){
+      const semCol=txt
+        .replace("marcar","").replace("entregue","").replace("whatsapp","")
+        .replace("email","").replace("whats","").replace("zap","")
+        .replace(norm(col),"").replace(norm(col.toLowerCase()),"");
+      const emp=findEmpresa(semCol,FOLHA_ATIVA);
+      if(emp){
+        upsertCell("folha",emp,col,"entregue",via,hoje);
+        showToast(`✅ ${emp} — ${col}${via?" via "+via:""} entregue`);
+        return true;
       }
     }
 
-    // "X coluna entregue" (sem "marcar")
-    const simpleMatch=txt.match(/(.+?)\s+(folha|darf|fgts|adiantamento|reinf|econs?)\s+entregue/);
-    if(!matched&&simpleMatch){
-      const q=simpleMatch[1].trim();
-      const col=colMap[simpleMatch[2]]||null;
-      if(col){
-        FOLHA_ATIVA.forEach(async emp=>{
-          if(fuzzyMatch(q,emp)){
-            await upsertFecha("folha",emp,col,"entregue","",new Date().toLocaleDateString("pt-BR"));
-            showToast(`✅ ${emp} — ${col} entregue`);
-            matched=true;
-          }
-        });
-      }
-    }
-
-    return matched;
+    return false;
   }
 
-  function showToast(msg,type="ok"){setToast({msg,type});setTimeout(()=>setToast(null),3500);}
+  function showToast(msg,type="ok"){setToast({msg,type});setTimeout(()=>setToast(null),4000);}
 
   async function saveForm(){
     if(!form.title.trim())return;
@@ -404,8 +410,8 @@ export default function App(){
     sub:{fontSize:11,color:TEXT2,marginBottom:13},
     overlay:{position:"fixed",inset:0,background:"rgba(20,40,80,0.4)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:12},
     modal:{background:"#fff",border:`1px solid ${BORDER}`,borderRadius:14,padding:20,width:"100%",maxWidth:520,maxHeight:"92vh",overflowY:"auto"},
-    label:{fontSize:10,color:TEXT2,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:"0.5px",fontWeight:600},
-    input:{width:"100%",background:GRAY,border:`1px solid ${BORDER}`,borderRadius:8,padding:"8px 10px",color:TEXT,fontSize:13,fontFamily:"inherit"},
+    lbl:{fontSize:10,color:TEXT2,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:"0.5px",fontWeight:600},
+    inp:{width:"100%",background:GRAY,border:`1px solid ${BORDER}`,borderRadius:8,padding:"8px 10px",color:TEXT,fontSize:13,fontFamily:"inherit"},
   };
 
   if(loading)return(
@@ -418,8 +424,8 @@ export default function App(){
 
   return(
     <div style={S.root}>
-      <style>{`.tc:hover{box-shadow:0 2px 10px rgba(21,101,192,.10)} .cell-btn:hover{opacity:.75;transform:scale(1.15)}`}</style>
-      {toast&&<div style={{position:"fixed",bottom:20,right:20,zIndex:999,background:toast.type==="err"?RED:BLUE,color:"#fff",borderRadius:10,padding:"10px 16px",fontSize:12.5,fontWeight:600,boxShadow:"0 4px 16px rgba(0,0,0,.2)",maxWidth:320}}>{toast.msg}</div>}
+      <style>{`.tc:hover{box-shadow:0 2px 10px rgba(21,101,192,.10)} .cb:hover{opacity:.8;transform:scale(1.12)}`}</style>
+      {toast&&<div style={{position:"fixed",bottom:20,right:20,zIndex:999,background:toast.type==="err"?RED:BLUE,color:"#fff",borderRadius:10,padding:"10px 16px",fontSize:12.5,fontWeight:600,boxShadow:"0 4px 16px rgba(0,0,0,.2)",maxWidth:340,whiteSpace:"pre-line"}}>{toast.msg}</div>}
 
       {/* HEADER */}
       <div style={S.header}>
@@ -440,7 +446,6 @@ export default function App(){
       </div>
 
       <div style={S.main}>
-        {/* STATS */}
         <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:16}}>
           {stats.map(s=>(
             <div key={s.label} style={{background:s.bg,border:`1px solid ${BORDER}`,borderRadius:11,padding:"11px 14px"}}>
@@ -517,7 +522,7 @@ export default function App(){
         {view==="clientes"&&<>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,flexWrap:"wrap",gap:8}}>
             <div style={S.section}>Painel por Cliente</div>
-            <select value={filterClient} onChange={e=>setFilterClient(e.target.value)} style={{...S.input,width:"auto",padding:"5px 9px"}}>
+            <select value={filterClient} onChange={e=>setFilterClient(e.target.value)} style={{...S.inp,width:"auto",padding:"5px 9px"}}>
               <option value="all">Todos os clientes</option>
               {allClients.map(c=><option key={c} value={c}>{c}</option>)}
             </select>
@@ -546,11 +551,11 @@ export default function App(){
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,flexWrap:"wrap",gap:8}}>
             <div style={S.section}>Todas as Tarefas</div>
             <div style={{display:"flex",gap:5}}>
-              <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} style={{...S.input,width:"auto",padding:"5px 8px",fontSize:11.5}}>
+              <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} style={{...S.inp,width:"auto",padding:"5px 8px",fontSize:11.5}}>
                 <option value="all">Todas categorias</option>
                 {Object.entries(CATEGORIES).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}
               </select>
-              <select value={filterPri} onChange={e=>setFilterPri(e.target.value)} style={{...S.input,width:"auto",padding:"5px 8px",fontSize:11.5}}>
+              <select value={filterPri} onChange={e=>setFilterPri(e.target.value)} style={{...S.inp,width:"auto",padding:"5px 8px",fontSize:11.5}}>
                 <option value="all">Todas prioridades</option>
                 {Object.entries(PRIORITIES).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
               </select>
@@ -593,131 +598,128 @@ export default function App(){
           {pending.length===0&&<Empty icon="🎯" msg="Sem tarefas pendentes." sub="Você está em dia!"/>}
         </>}
 
-        {/* FECHAMENTO MENSAL */}
+        {/* FECHAMENTO */}
         {view==="fechamento"&&<>
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,flexWrap:"wrap",gap:8}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8,flexWrap:"wrap",gap:8}}>
             <div style={S.section}>📁 Fechamento — {MONTHS_PT[new Date().getMonth()]} {new Date().getFullYear()}</div>
             <div style={{display:"flex",gap:6,alignItems:"center"}}>
-              <button onClick={startVoice} style={{background:listening?"#C62828":BLUE,color:"#fff",border:"none",borderRadius:7,padding:"6px 12px",fontSize:11.5,fontWeight:700,fontFamily:"inherit",cursor:"pointer",display:"flex",alignItems:"center",gap:5,animation:listening?"pulse 1s infinite":"none"}}>
+              <button onClick={startVoice} style={{background:listening?"#C62828":BLUE,color:"#fff",border:"none",borderRadius:7,padding:"6px 12px",fontSize:11.5,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>
                 {listening?"🔴 Ouvindo...":"🎤 Voz"}
               </button>
-              <button onClick={()=>{if(window.confirm("Resetar painel e começar novo ciclo?"))resetFechamento();}} style={{background:"#fff",border:`1px solid ${BORDER}`,color:TEXT2,borderRadius:7,padding:"6px 10px",fontSize:11,fontFamily:"inherit",cursor:"pointer"}}>🔄 Novo Ciclo</button>
               <button onClick={fetchFechamento} style={{background:"#fff",border:`1px solid ${BORDER}`,color:BLUE,borderRadius:7,padding:"6px 10px",fontSize:11,fontFamily:"inherit",cursor:"pointer"}}>↻ Atualizar</button>
+              <button onClick={resetFechamento} style={{background:"#fff",border:`1px solid ${BORDER}`,color:TEXT2,borderRadius:7,padding:"6px 10px",fontSize:11,fontFamily:"inherit",cursor:"pointer"}}>🔄 Novo Ciclo</button>
             </div>
           </div>
 
-          {/* DICAS DE VOZ */}
-          <div style={{background:"#F3E5F5",border:"1px solid #CE93D8",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:11,color:"#6A1B9A"}}>
-            <strong>🎤 Comandos de voz:</strong> "Marcar AutoBraz folha entregue" · "Tower tudo entregue" · "Ligeirinho FGTS WhatsApp"
+          {/* GUIA DE VOZ */}
+          <div style={{background:"#F3E5F5",border:"1px solid #CE93D8",borderRadius:8,padding:"8px 14px",marginBottom:8,fontSize:11,color:"#6A1B9A"}}>
+            <strong>🎤 Como usar a voz:</strong> Fale devagar e claramente. Ex: <em>"Marcar AutoBraz folha entregue"</em> · <em>"Tower tudo entregue"</em> · <em>"Ligeirinho FGTS WhatsApp"</em>
           </div>
 
-          {voiceLog&&<div style={{background:"#E3F0FF",border:`1px solid ${BLUE}`,borderRadius:7,padding:"6px 12px",fontSize:11.5,color:BLUE,marginBottom:10}}>🎤 {voiceLog}</div>}
+          {voiceLog&&<div style={{background:BLUE_LIGHT,border:`1px solid ${BLUE}`,borderRadius:7,padding:"6px 12px",fontSize:11.5,color:BLUE,marginBottom:8}}>{voiceLog}</div>}
 
-          {fechaLoading&&<div style={{textAlign:"center",padding:"20px",color:TEXT2,fontSize:13}}>Carregando painel...</div>}
+          {fechaLoading
+            ?<div style={{textAlign:"center",padding:"30px",color:TEXT2,fontSize:13}}>Carregando painel...</div>
+            :<>
+              <div style={{display:"flex",gap:4,marginBottom:14}}>
+                {[["folha","📋 Folha Ativa ("+FOLHA_ATIVA.length+")"],["dom","🏠 Domésticas"],["sem","📁 Sem Movimento"]].map(([v,l])=>(
+                  <button key={v} style={{background:fechaView===v?BLUE:"#fff",color:fechaView===v?"#fff":TEXT2,border:`1px solid ${fechaView===v?BLUE:BORDER}`,borderRadius:7,padding:"6px 14px",fontSize:12,fontFamily:"inherit",fontWeight:500,cursor:"pointer"}} onClick={()=>setFechaView(v)}>{l}</button>
+                ))}
+              </div>
 
-          {!fechaLoading&&<>
-            {/* SUB-ABAS */}
-            <div style={{display:"flex",gap:4,marginBottom:14}}>
-              {[["folha","📋 Folha Ativa ("+FOLHA_ATIVA.length+")"],["dom","🏠 Domésticas"],["sem","📁 Sem Movimento"]].map(([v,l])=>(
-                <button key={v} style={{background:fechaView===v?BLUE:"#fff",color:fechaView===v?"#fff":TEXT2,border:`1px solid ${fechaView===v?BLUE:BORDER}`,borderRadius:7,padding:"6px 14px",fontSize:12,fontFamily:"inherit",fontWeight:500,cursor:"pointer"}} onClick={()=>setFechaView(v)}>{l}</button>
-              ))}
-            </div>
+              {fechaView==="folha"&&(
+                <div style={{background:"#fff",border:`1px solid ${BORDER}`,borderRadius:10,overflow:"auto"}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:11.5}}>
+                    <thead>
+                      <tr style={{background:BLUE_LIGHT,borderBottom:`2px solid ${BLUE}`}}>
+                        <th style={{padding:"8px 10px",textAlign:"left",color:BLUE,fontWeight:700,fontSize:11,minWidth:150,position:"sticky",left:0,background:BLUE_LIGHT}}>Empresa</th>
+                        {FOLHA_COLS.map(c=><th key={c} style={{padding:"8px 8px",textAlign:"center",color:BLUE,fontWeight:700,fontSize:11,minWidth:85}}>{c}</th>)}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {FOLHA_ATIVA.map((emp,idx)=>{
+                        const allDone=FOLHA_COLS.every(c=>getCell("folha",emp,c).status==="entregue");
+                        return(
+                          <tr key={emp} style={{borderBottom:`1px solid ${BORDER}`,background:allDone?"#F1FBF4":idx%2===0?"#FAFBFF":"#fff"}}>
+                            <td style={{padding:"7px 10px",fontWeight:500,color:TEXT,position:"sticky",left:0,background:allDone?"#F1FBF4":idx%2===0?"#FAFBFF":"#fff",fontSize:11.5}}>{emp}</td>
+                            {FOLHA_COLS.map(col=>{
+                              const cell=getCell("folha",emp,col);
+                              const entregue=cell.status==="entregue";
+                              return(
+                                <td key={col} style={{padding:"5px 6px",textAlign:"center",verticalAlign:"middle"}}>
+                                  <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+                                    <span className="cb" onClick={()=>cycleFolhaStatus(emp,col)} style={{fontSize:16,cursor:"pointer",transition:"transform .15s"}}>{STATUS_ICON[cell.status]}</span>
+                                    {entregue&&(
+                                      <select value={cell.via||""} onChange={e=>setFolhaVia(emp,col,e.target.value)} style={{fontSize:8.5,border:`1px solid ${BORDER}`,borderRadius:3,padding:"1px 2px",background:GRAY,color:TEXT2,cursor:"pointer"}}>
+                                        <option value="">via?</option>
+                                        <option value="E-mail">E-mail</option>
+                                        <option value="WhatsApp">WhatsApp</option>
+                                      </select>
+                                    )}
+                                    {entregue&&cell.data_entrega&&<span style={{fontSize:8,color:TEXT2}}>{cell.data_entrega}</span>}
+                                  </div>
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  <div style={{padding:"8px 12px",fontSize:10,color:TEXT2,borderTop:`1px solid ${BORDER}`,display:"flex",justifyContent:"space-between"}}>
+                    <span>⬜ Pendente → 🟡 Em andamento → ✅ Entregue · Clique no ícone para avançar</span>
+                    <span style={{color:"#2E7D32",fontWeight:600}}>✅ {FOLHA_ATIVA.filter(e=>FOLHA_COLS.every(c=>getCell("folha",e,c).status==="entregue")).length}/{FOLHA_ATIVA.length} completas</span>
+                  </div>
+                </div>
+              )}
 
-            {/* FOLHA ATIVA */}
-            {fechaView==="folha"&&(
-              <div style={{background:"#fff",border:`1px solid ${BORDER}`,borderRadius:10,overflow:"auto"}}>
-                <table style={{width:"100%",borderCollapse:"collapse",fontSize:11.5}}>
-                  <thead>
-                    <tr style={{background:BLUE_LIGHT,borderBottom:`2px solid ${BLUE}`}}>
-                      <th style={{padding:"8px 10px",textAlign:"left",color:BLUE,fontWeight:700,fontSize:11,minWidth:150,position:"sticky",left:0,background:BLUE_LIGHT}}>Empresa</th>
-                      {FOLHA_COLS.map(c=><th key={c} style={{padding:"8px 8px",textAlign:"center",color:BLUE,fontWeight:700,fontSize:11,minWidth:85}}>{c}</th>)}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {FOLHA_ATIVA.map((emp,idx)=>{
-                      const allDone=FOLHA_COLS.every(c=>getFechaCell("folha",emp,c).status==="entregue");
-                      return(
-                        <tr key={emp} style={{borderBottom:`1px solid ${BORDER}`,background:allDone?"#F1FBF4":idx%2===0?"#FAFBFF":"#fff"}}>
-                          <td style={{padding:"7px 10px",fontWeight:500,color:TEXT,position:"sticky",left:0,background:allDone?"#F1FBF4":idx%2===0?"#FAFBFF":"#fff",fontSize:11.5}}>{emp}</td>
-                          {FOLHA_COLS.map(col=>{
-                            const cell=getFechaCell("folha",emp,col);
-                            const isEntregue=cell.status==="entregue";
-                            return(
-                              <td key={col} style={{padding:"5px 6px",textAlign:"center",verticalAlign:"middle"}}>
-                                <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
-                                  <span className="cell-btn" onClick={()=>cycleFolhaStatus(emp,col)} style={{fontSize:16,cursor:"pointer",transition:"transform .15s"}}>{STATUS_ICON[cell.status]}</span>
-                                  {isEntregue&&(
-                                    <select value={cell.via||""} onChange={e=>setFolhaVia(emp,col,e.target.value)} style={{fontSize:8.5,border:`1px solid ${BORDER}`,borderRadius:3,padding:"1px 2px",background:GRAY,color:TEXT2,cursor:"pointer"}}>
-                                      <option value="">via?</option>
-                                      <option value="E-mail">E-mail</option>
-                                      <option value="WhatsApp">WhatsApp</option>
-                                    </select>
-                                  )}
-                                  {isEntregue&&cell.data_entrega&&<span style={{fontSize:8,color:TEXT2}}>{cell.data_entrega}</span>}
-                                </div>
-                              </td>
-                            );
+              {fechaView==="dom"&&(
+                <div style={{background:"#fff",border:`1px solid ${BORDER}`,borderRadius:10,overflow:"auto"}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                    <thead>
+                      <tr style={{background:"#F3E5F5",borderBottom:`2px solid #6A1B9A`}}>
+                        <th style={{padding:"8px 10px",textAlign:"left",color:"#6A1B9A",fontWeight:700,fontSize:11}}>Empregada Doméstica</th>
+                        {DOM_COLS.map(c=><th key={c} style={{padding:"8px 18px",textAlign:"center",color:"#6A1B9A",fontWeight:700,fontSize:11}}>{c}</th>)}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {DOMESTICAS.map((emp,idx)=>(
+                        <tr key={emp} style={{borderBottom:`1px solid ${BORDER}`,background:idx%2===0?"#FAFBFF":"#fff"}}>
+                          <td style={{padding:"9px 10px",fontWeight:500,color:TEXT}}>{emp}</td>
+                          {DOM_COLS.map(col=>{
+                            const cell=getCell("dom",emp,col);
+                            return(<td key={col} style={{padding:"6px",textAlign:"center"}}>
+                              <span className="cb" onClick={()=>cycleDomStatus(emp,col)} style={{fontSize:18,cursor:"pointer",transition:"transform .15s"}}>{STATUS_ICON[cell.status]}</span>
+                            </td>);
                           })}
                         </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {fechaView==="sem"&&(
+                <div style={{background:"#fff",border:`1px solid ${BORDER}`,borderRadius:10,padding:14}}>
+                  <div style={{fontSize:11.5,color:TEXT2,marginBottom:12}}>Empresas sem movimento — entregue via automação. Marque como conferido:</div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:7}}>
+                    {SEM_MOVIMENTO.map(emp=>{
+                      const conf=getCell("sem",emp,"conferido").status==="entregue";
+                      return(
+                        <div key={emp} onClick={()=>toggleSem(emp)} style={{border:`1.5px solid ${conf?"#2E7D32":BORDER}`,borderRadius:8,padding:"8px 12px",cursor:"pointer",background:conf?"#F1FBF4":"#fff",display:"flex",alignItems:"center",gap:8,transition:"all .15s"}}>
+                          <span style={{fontSize:16}}>{conf?"✅":"⬜"}</span>
+                          <span style={{fontSize:12,color:TEXT,fontWeight:conf?600:400}}>{emp}</span>
+                        </div>
                       );
                     })}
-                  </tbody>
-                </table>
-                <div style={{padding:"8px 12px",fontSize:10,color:TEXT2,borderTop:`1px solid ${BORDER}`,display:"flex",justifyContent:"space-between"}}>
-                  <span>⬜ Pendente → 🟡 Em andamento → ✅ Entregue · Clique no ícone para avançar</span>
-                  <span style={{color:"#2E7D32",fontWeight:600}}>✅ {FOLHA_ATIVA.filter(e=>FOLHA_COLS.every(c=>getFechaCell("folha",e,c).status==="entregue")).length}/{FOLHA_ATIVA.length} completas</span>
+                  </div>
+                  <div style={{marginTop:12,fontSize:11,color:TEXT2,fontWeight:600}}>
+                    ✅ {SEM_MOVIMENTO.filter(e=>getCell("sem",e,"conferido").status==="entregue").length} de {SEM_MOVIMENTO.length} conferidas
+                  </div>
                 </div>
-              </div>
-            )}
-
-            {/* DOMÉSTICAS */}
-            {fechaView==="dom"&&(
-              <div style={{background:"#fff",border:`1px solid ${BORDER}`,borderRadius:10,overflow:"auto"}}>
-                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                  <thead>
-                    <tr style={{background:"#F3E5F5",borderBottom:`2px solid #6A1B9A`}}>
-                      <th style={{padding:"8px 10px",textAlign:"left",color:"#6A1B9A",fontWeight:700,fontSize:11}}>Empregada Doméstica</th>
-                      {DOM_COLS.map(c=><th key={c} style={{padding:"8px 18px",textAlign:"center",color:"#6A1B9A",fontWeight:700,fontSize:11}}>{c}</th>)}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {DOMESTICAS.map((emp,idx)=>(
-                      <tr key={emp} style={{borderBottom:`1px solid ${BORDER}`,background:idx%2===0?"#FAFBFF":"#fff"}}>
-                        <td style={{padding:"9px 10px",fontWeight:500,color:TEXT}}>{emp}</td>
-                        {DOM_COLS.map(col=>{
-                          const cell=getFechaCell("dom",emp,col);
-                          return(<td key={col} style={{padding:"6px",textAlign:"center"}}>
-                            <span className="cell-btn" onClick={()=>cycleDomStatus(emp,col)} style={{fontSize:18,cursor:"pointer",transition:"transform .15s"}}>{STATUS_ICON[cell.status]}</span>
-                          </td>);
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            {/* SEM MOVIMENTO */}
-            {fechaView==="sem"&&(
-              <div style={{background:"#fff",border:`1px solid ${BORDER}`,borderRadius:10,padding:14}}>
-                <div style={{fontSize:11.5,color:TEXT2,marginBottom:12}}>Empresas sem movimento — entregue mensalmente via automação. Marque como conferido:</div>
-                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:7}}>
-                  {SEM_MOVIMENTO.map(emp=>{
-                    const conf=getFechaCell("sem",emp,"conferido").status==="entregue";
-                    return(
-                      <div key={emp} onClick={()=>toggleSem(emp)} style={{border:`1.5px solid ${conf?"#2E7D32":BORDER}`,borderRadius:8,padding:"8px 12px",cursor:"pointer",background:conf?"#F1FBF4":"#fff",display:"flex",alignItems:"center",gap:8,transition:"all .15s"}}>
-                        <span style={{fontSize:16}}>{conf?"✅":"⬜"}</span>
-                        <span style={{fontSize:12,color:TEXT,fontWeight:conf?600:400}}>{emp}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div style={{marginTop:12,fontSize:11,color:TEXT2,fontWeight:600}}>
-                  ✅ {SEM_MOVIMENTO.filter(e=>getFechaCell("sem",e,"conferido").status==="entregue").length} de {SEM_MOVIMENTO.length} conferidas
-                </div>
-              </div>
-            )}
-          </>}
+              )}
+            </>
+          }
         </>}
       </div>
 
@@ -727,17 +729,17 @@ export default function App(){
           <div style={S.modal}>
             <div style={{fontWeight:700,fontSize:16,color:BLUE,marginBottom:15,borderBottom:`2px solid ${BLUE_LIGHT}`,paddingBottom:10}}>{editId?"✏️ Editar Tarefa":"✨ Nova Tarefa"}</div>
             <div style={{display:"flex",flexDirection:"column",gap:11}}>
-              <div><label style={S.label}>Título *</label><input style={S.input} value={form.title} onChange={e=>setForm(f=>({...f,title:e.target.value}))} placeholder="Ex: Folha de pagamento maio..."/></div>
+              <div><label style={S.lbl}>Título *</label><input style={S.inp} value={form.title} onChange={e=>setForm(f=>({...f,title:e.target.value}))} placeholder="Ex: Folha de pagamento maio..."/></div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                <div><label style={S.label}>Categoria</label><select style={S.input} value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}>{Object.entries(CATEGORIES).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}</select></div>
-                <div><label style={S.label}>Prioridade</label><select style={S.input} value={form.priority} onChange={e=>setForm(f=>({...f,priority:e.target.value}))}>{Object.entries(PRIORITIES).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</select></div>
+                <div><label style={S.lbl}>Categoria</label><select style={S.inp} value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}>{Object.entries(CATEGORIES).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}</select></div>
+                <div><label style={S.lbl}>Prioridade</label><select style={S.inp} value={form.priority} onChange={e=>setForm(f=>({...f,priority:e.target.value}))}>{Object.entries(PRIORITIES).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</select></div>
               </div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                <div><label style={S.label}>Prazo</label><input type="date" style={S.input} value={form.due} onChange={e=>setForm(f=>({...f,due:e.target.value}))}/></div>
-                <div><label style={S.label}>Data de Entrada</label><input type="date" style={S.input} value={form.created_at} onChange={e=>setForm(f=>({...f,created_at:e.target.value}))}/></div>
+                <div><label style={S.lbl}>Prazo</label><input type="date" style={S.inp} value={form.due} onChange={e=>setForm(f=>({...f,due:e.target.value}))}/></div>
+                <div><label style={S.lbl}>Data de Entrada</label><input type="date" style={S.inp} value={form.created_at} onChange={e=>setForm(f=>({...f,created_at:e.target.value}))}/></div>
               </div>
-              <div><label style={S.label}>Cliente</label><input style={S.input} value={form.client} onChange={e=>setForm(f=>({...f,client:e.target.value}))} placeholder="Nome do cliente..."/></div>
-              <div><label style={S.label}>Observações</label><textarea style={{...S.input,resize:"none"}} rows={2} value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} placeholder="Detalhes adicionais..."/></div>
+              <div><label style={S.lbl}>Cliente</label><input style={S.inp} value={form.client} onChange={e=>setForm(f=>({...f,client:e.target.value}))} placeholder="Nome do cliente..."/></div>
+              <div><label style={S.lbl}>Observações</label><textarea style={{...S.inp,resize:"none"}} rows={2} value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} placeholder="Detalhes adicionais..."/></div>
               <div style={{display:"flex",gap:8,marginTop:2}}>
                 <button onClick={()=>setShowForm(false)} style={{flex:1,background:"#fff",border:`1px solid ${BORDER}`,color:TEXT2,borderRadius:7,padding:"9px",fontSize:12,fontFamily:"inherit",cursor:"pointer"}}>Cancelar</button>
                 <button onClick={saveForm} disabled={saving} style={{flex:2,background:saving?"#90A4AE":BLUE,color:"#fff",border:"none",borderRadius:7,padding:"9px",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:saving?"not-allowed":"pointer"}}>{saving?"Salvando...":editId?"Salvar alterações":"Criar tarefa"}</button>
@@ -771,7 +773,7 @@ export default function App(){
                   </div>
                 ))}
               </div>
-              <div style={{marginBottom:11}}><label style={S.label}>Cliente *</label><input style={S.input} value={templateClient} onChange={e=>setTemplateClient(e.target.value)} placeholder="Nome do cliente..."/></div>
+              <div style={{marginBottom:11}}><label style={S.lbl}>Cliente *</label><input style={S.inp} value={templateClient} onChange={e=>setTemplateClient(e.target.value)} placeholder="Nome do cliente..."/></div>
             </>}
             <div style={{display:"flex",gap:8}}>
               <button onClick={()=>{setShowTemplates(false);setSelectedTemplate(null);setTemplateClient("");}} style={{flex:1,background:"#fff",border:`1px solid ${BORDER}`,color:TEXT2,borderRadius:7,padding:"9px",fontSize:12,fontFamily:"inherit",cursor:"pointer"}}>Cancelar</button>
@@ -786,9 +788,9 @@ export default function App(){
         <div style={S.overlay} onClick={e=>e.target===e.currentTarget&&(setShowRecurring(false),setRecurringClient(""),setSelectedRecurring([]))}>
           <div style={S.modal}>
             <div style={{fontWeight:700,fontSize:16,color:"#00838F",marginBottom:14,borderBottom:"2px solid #E0F7FA",paddingBottom:10}}>🔄 Tarefas Recorrentes do Mês</div>
-            <div style={{marginBottom:11}}><label style={S.label}>Cliente *</label><input style={S.input} value={recurringClient} onChange={e=>setRecurringClient(e.target.value)} placeholder="Nome do cliente..."/></div>
+            <div style={{marginBottom:11}}><label style={S.lbl}>Cliente *</label><input style={S.inp} value={recurringClient} onChange={e=>setRecurringClient(e.target.value)} placeholder="Nome do cliente..."/></div>
             <div style={{marginBottom:4}}>
-              <label style={S.label}>Selecione as tarefas</label>
+              <label style={S.lbl}>Selecione as tarefas</label>
               <div style={{display:"flex",justifyContent:"flex-end",marginBottom:5}}>
                 <span style={{fontSize:10.5,color:BLUE,cursor:"pointer",fontWeight:600}} onClick={()=>setSelectedRecurring(RECURRING_TEMPLATES.map((_,i)=>i))}>Selecionar todas</span>
                 <span style={{fontSize:10.5,color:TEXT2,margin:"0 5px"}}>|</span>
