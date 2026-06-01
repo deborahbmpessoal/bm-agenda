@@ -85,7 +85,7 @@ const NAV_ITEMS=[
   {id:"mes",icon:"📆",label:"Mês"},
   {id:"clientes",icon:"👥",label:"Clientes"},
   {id:"tarefas",icon:"📋",label:"Tarefas"},
-  {id:"mapa",icon:"📊",label:"Mapa"},
+  {id:"dashboard",icon:"📈",label:"Dashboard"},
   {id:"fechamento",icon:"📁",label:"Fechamento"},
 ];
 
@@ -141,7 +141,7 @@ export default function App(){
   const [form,setForm]=useState(emptyForm);
 
   useEffect(()=>{fetchTasks();},[]);
-  useEffect(()=>{if(view==="fechamento")fetchFechamento();},[view]);
+  useEffect(()=>{if(view==="fechamento"||view==="dashboard")fetchFechamento();},[view]);
 
   async function fetchTasks(){
     setLoading(true);
@@ -161,13 +161,17 @@ export default function App(){
   function getCell(tipo,empresa,coluna){return fechaMap[`${tipo}|${empresa}|${coluna}`]||{status:"pendente",via:"",data_entrega:"",id:null};}
 
   async function upsertCell(tipo,empresa,coluna,status,via="",data_entrega=""){
-    const existing=getCell(tipo,empresa,coluna);
     const payload={month_key:monthKey,tipo,empresa,coluna,status,via,data_entrega,updated_at:new Date().toISOString()};
-    let error;
-    if(existing.id){({error}=await supabase.from("fechamento_mensal").update(payload).eq("id",existing.id));}
-    else{({error}=await supabase.from("fechamento_mensal").insert([payload]));}
-    if(error){showToast("Erro ao salvar","err");return;}
-    setFechaMap(prev=>({...prev,[`${tipo}|${empresa}|${coluna}`]:{...payload,id:existing.id||"new"}}));
+    // Usa upsert com onConflict — evita erro de id "new" e não precisa saber se existe
+    const{error}=await supabase.from("fechamento_mensal").upsert(payload,{onConflict:"month_key,tipo,empresa,coluna"});
+    if(error){
+      showToast("Erro ao salvar: "+error.message,"err");
+      // Recarrega do banco para garantir sincronização
+      await fetchFechamento();
+      return;
+    }
+    // Atualiza mapa local imediatamente
+    setFechaMap(prev=>({...prev,[`${tipo}|${empresa}|${coluna}`]:{...payload}}));
   }
 
   async function cycleFolhaStatus(empresa,col){const cell=getCell("folha",empresa,col);const next=STATUS_CYCLE[(STATUS_CYCLE.indexOf(cell.status)+1)%STATUS_CYCLE.length];await upsertCell("folha",empresa,col,next,cell.via,next==="entregue"?new Date().toLocaleDateString("pt-BR"):"");}
@@ -263,7 +267,13 @@ export default function App(){
     const ids=new Set(base.map(t=>t.id));
     return[...base,...prox7Urgentes.filter(t=>!ids.has(t.id))];
   },[tasks]);
-  const comunsTab=useMemo(()=>allTodayPending.filter(t=>t.priority==="media"||t.priority==="baixa"),[tasks]);
+  const in2days=fmtDate(addDays(today,2));
+  const comunsTab=useMemo(()=>{
+    const base=allTodayPending.filter(t=>t.priority==="media"||t.priority==="baixa");
+    const prox2=pending.filter(t=>t.due>todayStr&&t.due<=in2days&&t.priority==="media");
+    const ids=new Set(base.map(t=>t.id));
+    return[...base,...prox2.filter(t=>!ids.has(t.id))].sort((a,b)=>scoreTask(b)-scoreTask(a));
+  },[tasks]);
 
   const weekTasksFor=(ds)=>tasks.filter(t=>!t.done&&t.due===ds).sort((a,b)=>scoreTask(b)-scoreTask(a));
   const allFiltered=useMemo(()=>[...pending].filter(t=>filterCat==="all"||t.category===filterCat).filter(t=>filterPri==="all"||t.priority===filterPri).sort((a,b)=>scoreTask(b)-scoreTask(a)),[tasks,filterCat,filterPri]);
@@ -527,7 +537,11 @@ export default function App(){
           {pending.length===0&&<Empty icon="🎯" msg="Sem tarefas pendentes." sub="Você está em dia!"/>}
         </>}
 
-        {/* ── FECHAMENTO ── */}
+
+        {/* ── DASHBOARD ── */}
+        {view==="dashboard"&&<DashboardView fechaMap={fechaMap} fechaLoading={fechaLoading} onRefresh={fetchFechamento} getCell={getCell}/>}
+
+                {/* ── FECHAMENTO ── */}
         {view==="fechamento"&&<>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8,flexWrap:"wrap",gap:8}}>
             <div style={S.section}>📁 Fechamento — {MONTHS_PT[new Date().getMonth()]}</div>
@@ -779,6 +793,274 @@ function Card({t,i,S,onToggle,onEdit,onDelete,compact,showDates}){
     </div>
   );
 }
+
+// ─────────────────────────────────────────────
+// DASHBOARD COMPONENT
+// ─────────────────────────────────────────────
+const FOLHA_ATIVA_D=["Acervo Chop","AutoBraz","Blindar Contagem","Cantina Freitas","Cleiton Martins","Cledson Elevadores","Control Vt","Decora","Deposito Cerveja MTZ","Di France","Espaço Presentes","Espaço Vitta Pilates","Flavia FSA","FOCO","Ge Car","Guindaumaq","HJ Peças","Jeovane","Ligeirinho","M&R Placas","M3 Comércio","Magnus Imóveis","Marcelo Transporte","MDC Locação","MG5","Milton Tem Tem","Natal MTZ","Natalia Mota","Nivair","OMR Entregas","Opção Locação","Opção Visual","PRONTOVET Ibirité","R&E Top Diesel","RDS","Frutos de Minas Barreiro","Frutos de Minas Barreiro FL","Rede Frutos de Minas Betim","Frutos de Minas Betim FL","Res Lealdo","Rodrigar","Rosálio Duarte","SEGUROBRAS","Stenner","Shopping das Peças","Tower","T&R"];
+const DOMESTICAS_D=["Elza Maria","Maria dos Anjos","Leonídia","Eliane","Eduardo Freitas","Sandra","Geraldo"];
+const SEM_MOVIMENTO_D=["Antonio Clareti","Blindar Ibirité","By Tracker","CT Treinamento","Deposito Cerveja FL","EABorges","Heleno","Marc Textil","Merc. Manhumirim","Natal FL","NetForce","Piazza Peças","Pulga Car","Quintal Fornalha","Protagon","PROFISS","Ramon Carvalho MEI","RDL Holding","Tiago Alves","Valente"];
+const FOLHA_COLS_D=["Folha","DARF","FGTS","Adiantamento","REINF","eCons"];
+const DOM_COLS_D=["Folha","Guia","Status"];
+const BLUE_D="#1565C0",BLUE_LIGHT_D="#E3F0FF",RED_D="#C62828",RED_LIGHT_D="#FFEBEE",BORDER_D="#DDE3F0",TEXT_D="#1A2340",TEXT2_D="#5A6580",GRAY_D="#F5F6FA";
+
+function MiniBar({val,total,color}){
+  const pct=total===0?0:Math.round((val/total)*100);
+  return(
+    <div style={{display:"flex",alignItems:"center",gap:8}}>
+      <div style={{flex:1,height:8,background:"#EEF0F5",borderRadius:4,overflow:"hidden"}}>
+        <div style={{width:`${pct}%`,height:"100%",background:color,borderRadius:4,transition:"width .4s ease"}}/>
+      </div>
+      <span style={{fontSize:11,fontWeight:700,color,minWidth:32}}>{pct}%</span>
+    </div>
+  );
+}
+
+function DonutChart({segments,size=120}){
+  const total=segments.reduce((s,x)=>s+x.val,0);
+  if(total===0)return<div style={{width:size,height:size,borderRadius:"50%",background:"#EEF0F5",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:TEXT2_D}}>Vazio</div>;
+  let offset=0;
+  const r=40,cx=60,cy=60,circ=2*Math.PI*r;
+  return(
+    <svg width={size} height={size} viewBox="0 0 120 120">
+      {segments.map((seg,i)=>{
+        const pct=seg.val/total;
+        const dash=pct*circ;
+        const gap=circ-dash;
+        const el=<circle key={i} cx={cx} cy={cy} r={r} fill="none" stroke={seg.color} strokeWidth={18} strokeDasharray={`${dash} ${gap}`} strokeDashoffset={-offset*circ} style={{transition:"stroke-dasharray .4s ease"}}/>;
+        offset+=pct;
+        return el;
+      })}
+      <text x={60} y={55} textAnchor="middle" fontSize={18} fontWeight={700} fill={TEXT_D}>{total}</text>
+      <text x={60} y={72} textAnchor="middle" fontSize={9} fill={TEXT2_D}>total</text>
+    </svg>
+  );
+}
+
+function DashboardView({fechaMap,fechaLoading,onRefresh,getCell}){
+  const [dashTab,setDashTab]=useState("folha");
+
+  // ── FOLHA ATIVA stats ──
+  const folhaStats=useMemo(()=>{
+    let entregue=0,andamento=0,pendente=0,aguardando=0;
+    const porColuna={};
+    FOLHA_COLS_D.forEach(c=>{porColuna[c]={entregue:0,andamento:0,pendente:0};});
+    FOLHA_ATIVA_D.forEach(emp=>{
+      let todosEntregue=true,algumAndamento=false,algumAguardando=false;
+      FOLHA_COLS_D.forEach(col=>{
+        const cell=getCell("folha",emp,col);
+        porColuna[col][cell.status]=(porColuna[col][cell.status]||0)+1;
+        if(cell.status!=="entregue")todosEntregue=false;
+        if(cell.status==="andamento")algumAndamento=true;
+        // "aguardando cliente" = folha entregue mas DARF/FGTS pendente
+        if(col==="Folha"&&cell.status==="entregue")algumAguardando=true;
+      });
+      const darfOk=getCell("folha",emp,"DARF").status==="entregue";
+      const fgtsOk=getCell("folha",emp,"FGTS").status==="entregue";
+      if(todosEntregue)entregue++;
+      else if(algumAguardando&&!darfOk&&!fgtsOk)aguardando++;
+      else if(algumAndamento)andamento++;
+      else pendente++;
+    });
+    return{entregue,andamento,pendente,aguardando,porColuna,total:FOLHA_ATIVA_D.length};
+  },[fechaMap]);
+
+  // ── DOMÉSTICAS stats ──
+  const domStats=useMemo(()=>{
+    let entregue=0,andamento=0,pendente=0;
+    DOMESTICAS_D.forEach(emp=>{
+      const statuses=DOM_COLS_D.map(c=>getCell("dom",emp,c).status);
+      if(statuses.every(s=>s==="entregue"))entregue++;
+      else if(statuses.some(s=>s==="andamento"))andamento++;
+      else pendente++;
+    });
+    return{entregue,andamento,pendente,total:DOMESTICAS_D.length};
+  },[fechaMap]);
+
+  // ── SEM MOVIMENTO stats ──
+  const semStats=useMemo(()=>{
+    const conf=SEM_MOVIMENTO_D.filter(e=>getCell("sem",e,"conferido").status==="entregue").length;
+    return{conferido:conf,pendente:SEM_MOVIMENTO_D.length-conf,total:SEM_MOVIMENTO_D.length};
+  },[fechaMap]);
+
+  // Empresas por status (folha)
+  const empresasPorStatus=useMemo(()=>{
+    const entregues=[],aguardando=[],andamento=[],pendentes=[];
+    FOLHA_ATIVA_D.forEach(emp=>{
+      const folhaOk=getCell("folha",emp,"Folha").status==="entregue";
+      const darfOk=getCell("folha",emp,"DARF").status==="entregue";
+      const fgtsOk=getCell("folha",emp,"FGTS").status==="entregue";
+      const tudo=FOLHA_COLS_D.every(c=>getCell("folha",emp,c).status==="entregue");
+      const algumAnd=FOLHA_COLS_D.some(c=>getCell("folha",emp,c).status==="andamento");
+      if(tudo)entregues.push(emp);
+      else if(folhaOk&&(!darfOk||!fgtsOk))aguardando.push(emp);
+      else if(algumAnd)andamento.push(emp);
+      else pendentes.push(emp);
+    });
+    return{entregues,aguardando,andamento,pendentes};
+  },[fechaMap]);
+
+  if(fechaLoading)return<div style={{textAlign:"center",padding:"40px",color:TEXT2_D,fontSize:13}}>Carregando dashboard...</div>;
+
+  const tabStyle=(active,color)=>({
+    flex:1,background:active?color:"#fff",color:active?"#fff":TEXT2_D,
+    border:`1px solid ${active?color:BORDER_D}`,borderRadius:8,padding:"8px 4px",
+    fontSize:11.5,fontFamily:"inherit",fontWeight:500,cursor:"pointer",transition:"all .15s"
+  });
+
+  const statCard=(val,label,color,bg)=>(
+    <div style={{background:bg,border:`1px solid ${color}33`,borderRadius:10,padding:"12px 14px",flex:1,minWidth:0}}>
+      <div style={{fontSize:26,fontWeight:700,color,lineHeight:1}}>{val}</div>
+      <div style={{fontSize:10.5,color,marginTop:3,fontWeight:500,lineHeight:1.2}}>{label}</div>
+    </div>
+  );
+
+  const groupCard=(title,icon,color,bg,empresas)=>(
+    empresas.length===0?null:
+    <div style={{background:"#fff",border:`1.5px solid ${color}33`,borderLeft:`4px solid ${color}`,borderRadius:10,padding:"12px 14px",marginBottom:10}}>
+      <div style={{fontSize:12,fontWeight:700,color,marginBottom:8}}>{icon} {title} <span style={{fontWeight:400,color:TEXT2_D,fontSize:11}}>({empresas.length})</span></div>
+      <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+        {empresas.map(e=><span key={e} style={{background:bg,color,border:`1px solid ${color}44`,borderRadius:5,padding:"3px 8px",fontSize:11,fontWeight:500}}>{e}</span>)}
+      </div>
+    </div>
+  );
+
+  return(
+    <div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
+        <div style={{fontWeight:700,fontSize:18,color:TEXT_D}}>📈 Dashboard de Entregas</div>
+        <button onClick={onRefresh} style={{background:"#fff",border:`1px solid ${BORDER_D}`,color:BLUE_D,borderRadius:7,padding:"6px 12px",fontSize:12,fontFamily:"inherit",cursor:"pointer"}}>↻ Atualizar</button>
+      </div>
+      <div style={{fontSize:11,color:TEXT2_D,marginBottom:14}}>{new Date().toLocaleDateString("pt-BR",{month:"long",year:"numeric"})}</div>
+
+      {/* SUB-ABAS */}
+      <div style={{display:"flex",gap:6,marginBottom:16}}>
+        <button style={tabStyle(dashTab==="folha",BLUE_D)} onClick={()=>setDashTab("folha")}>📋 Folha Ativa</button>
+        <button style={tabStyle(dashTab==="dom","#6A1B9A")} onClick={()=>setDashTab("dom")}>🏠 Domésticas</button>
+        <button style={tabStyle(dashTab==="sem","#00838F")} onClick={()=>setDashTab("sem")}>📁 Sem Movimento</button>
+      </div>
+
+      {/* ── FOLHA ATIVA ── */}
+      {dashTab==="folha"&&<>
+        {/* Cards de resumo */}
+        <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+          {statCard(folhaStats.entregue,"Concluídas","#2E7D32","#E8F5E9")}
+          {statCard(folhaStats.aguardando,"Aguard. Cliente","#E65100","#FFF3E0")}
+          {statCard(folhaStats.andamento,"Em Andamento",BLUE_D,BLUE_LIGHT_D)}
+          {statCard(folhaStats.pendente,"Pendentes",RED_D,RED_LIGHT_D)}
+        </div>
+
+        {/* Donut + progresso por coluna */}
+        <div style={{display:"flex",gap:12,marginBottom:16,flexWrap:"wrap"}}>
+          {/* Donut */}
+          <div style={{background:"#fff",border:`1px solid ${BORDER_D}`,borderRadius:12,padding:"16px",display:"flex",flexDirection:"column",alignItems:"center",gap:10,minWidth:160}}>
+            <div style={{fontSize:12,fontWeight:700,color:TEXT_D}}>Visão Geral</div>
+            <DonutChart segments={[
+              {val:folhaStats.entregue,color:"#2E7D32"},
+              {val:folhaStats.aguardando,color:"#E65100"},
+              {val:folhaStats.andamento,color:BLUE_D},
+              {val:folhaStats.pendente,color:RED_D},
+            ]} size={120}/>
+            <div style={{display:"flex",flexDirection:"column",gap:4,width:"100%"}}>
+              {[["#2E7D32","Concluídas",folhaStats.entregue],["#E65100","Aguard. Cliente",folhaStats.aguardando],[BLUE_D,"Em andamento",folhaStats.andamento],[RED_D,"Pendentes",folhaStats.pendente]].map(([c,l,v])=>(
+                <div key={l} style={{display:"flex",alignItems:"center",gap:5,fontSize:10.5}}>
+                  <div style={{width:8,height:8,borderRadius:"50%",background:c,flexShrink:0}}/>
+                  <span style={{flex:1,color:TEXT2_D}}>{l}</span>
+                  <span style={{fontWeight:700,color:c}}>{v}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Progresso por coluna */}
+          <div style={{background:"#fff",border:`1px solid ${BORDER_D}`,borderRadius:12,padding:"16px",flex:1,minWidth:200}}>
+            <div style={{fontSize:12,fontWeight:700,color:TEXT_D,marginBottom:12}}>Progresso por Coluna</div>
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              {FOLHA_COLS_D.map(col=>{
+                const e=folhaStats.porColuna[col]?.entregue||0;
+                const total=folhaStats.total;
+                return(
+                  <div key={col}>
+                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                      <span style={{fontSize:11.5,fontWeight:600,color:TEXT_D}}>{col}</span>
+                      <span style={{fontSize:11,color:TEXT2_D}}>{e}/{total}</span>
+                    </div>
+                    <MiniBar val={e} total={total} color={e===total?"#2E7D32":e>total/2?BLUE_D:RED_D}/>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* Empresas por status */}
+        <div style={{fontSize:12,fontWeight:700,color:TEXT_D,marginBottom:10,textTransform:"uppercase",letterSpacing:"0.5px"}}>Empresas por Status</div>
+        {groupCard("Concluídas — tudo entregue","✅","#2E7D32","#E8F5E9",empresasPorStatus.entregues)}
+        {groupCard("Aguardando Cliente — folha enviada, guias pendentes","⏳","#E65100","#FFF3E0",empresasPorStatus.aguardando)}
+        {groupCard("Em Andamento","🟡",BLUE_D,BLUE_LIGHT_D,empresasPorStatus.andamento)}
+        {groupCard("Pendentes — nenhuma etapa iniciada","⬜",RED_D,RED_LIGHT_D,empresasPorStatus.pendentes)}
+      </>}
+
+      {/* ── DOMÉSTICAS ── */}
+      {dashTab==="dom"&&<>
+        <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+          {statCard(domStats.entregue,"Concluídas","#2E7D32","#E8F5E9")}
+          {statCard(domStats.andamento,"Em Andamento",BLUE_D,BLUE_LIGHT_D)}
+          {statCard(domStats.pendente,"Pendentes",RED_D,RED_LIGHT_D)}
+        </div>
+        <div style={{background:"#fff",border:`1px solid ${BORDER_D}`,borderRadius:12,padding:"16px",marginBottom:14}}>
+          <div style={{fontSize:12,fontWeight:700,color:TEXT_D,marginBottom:12}}>Status por Empregada</div>
+          {DOMESTICAS_D.map(emp=>{
+            const statuses=DOM_COLS_D.map(c=>getCell("dom",emp,c).status);
+            const tudo=statuses.every(s=>s==="entregue");
+            const algum=statuses.some(s=>s==="entregue"||s==="andamento");
+            const cor=tudo?"#2E7D32":algum?BLUE_D:RED_D;
+            const bg=tudo?"#E8F5E9":algum?BLUE_LIGHT_D:RED_LIGHT_D;
+            const icon=tudo?"✅":algum?"🟡":"⬜";
+            return(
+              <div key={emp} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:`1px solid ${BORDER_D}`}}>
+                <span style={{fontSize:16}}>{icon}</span>
+                <span style={{flex:1,fontSize:13,fontWeight:500,color:TEXT_D}}>{emp}</span>
+                <div style={{display:"flex",gap:5}}>
+                  {DOM_COLS_D.map(col=>{
+                    const s=getCell("dom",emp,col).status;
+                    return<span key={col} style={{fontSize:9.5,background:s==="entregue"?"#E8F5E9":s==="andamento"?BLUE_LIGHT_D:"#F5F6FA",color:s==="entregue"?"#2E7D32":s==="andamento"?BLUE_D:TEXT2_D,border:`1px solid ${s==="entregue"?"#2E7D32":s==="andamento"?BLUE_D:BORDER_D}44`,borderRadius:4,padding:"2px 6px",fontWeight:500}}>{col}</span>;
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </>}
+
+      {/* ── SEM MOVIMENTO ── */}
+      {dashTab==="sem"&&<>
+        <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+          {statCard(semStats.conferido,"Conferidas","#2E7D32","#E8F5E9")}
+          {statCard(semStats.pendente,"Pendentes",RED_D,RED_LIGHT_D)}
+          {statCard(semStats.total,"Total","#00838F","#E0F7FA")}
+        </div>
+        <div style={{background:"#fff",border:`1px solid ${BORDER_D}`,borderRadius:12,padding:"14px",marginBottom:14}}>
+          <div style={{fontSize:12,fontWeight:700,color:TEXT_D,marginBottom:8}}>Progresso Geral</div>
+          <MiniBar val={semStats.conferido} total={semStats.total} color="#2E7D32"/>
+          <div style={{fontSize:11,color:TEXT2_D,marginTop:6}}>{semStats.conferido} de {semStats.total} conferidas</div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:7}}>
+          {SEM_MOVIMENTO_D.map(emp=>{
+            const conf=getCell("sem",emp,"conferido").status==="entregue";
+            return(
+              <div key={emp} style={{border:`1.5px solid ${conf?"#2E7D32":BORDER_D}`,borderRadius:8,padding:"9px 12px",background:conf?"#F1FBF4":"#fff",display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:16}}>{conf?"✅":"⬜"}</span>
+                <span style={{fontSize:12,color:TEXT_D,fontWeight:conf?600:400}}>{emp}</span>
+              </div>
+            );
+          })}
+        </div>
+      </>}
+    </div>
+  );
+}
+
 
 function Empty({icon,msg,sub}){
   return(<div style={{textAlign:"center",padding:"44px 0",color:"#B0B8CC"}}>
