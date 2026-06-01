@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 const SUPABASE_URL = "https://dmugffjkrrgndrtbdotm.supabase.co";
@@ -23,54 +23,41 @@ const PRIORITIES={
   baixa:{label:"Baixa",color:"#2E7D32",bg:"#E8F5E9",dot:"●"},
 };
 
-// PROCESSOS CORRIGIDOS
 const PROCESS_TEMPLATES={
-  folha:{
-    label:"Folha de Pagamento",icon:"💼",category:"dp",color:"#6A1B9A",
-    steps:[
-      {title:"Aguardar informações do cliente (comissão, horas extras, adicional noturno, adiantamento, faltas)",priority:"alta",daysFromNow:0},
-      {title:"Lançar variáveis no sistema",priority:"alta",daysFromNow:1},
-      {title:"Apurar e fechar a folha",priority:"urgente",daysFromNow:2},
-      {title:"Enviar para o cliente conferir",priority:"urgente",daysFromNow:3},
-      {title:"Aguardar OK do cliente",priority:"alta",daysFromNow:4},
-      {title:"Liberar holerites",priority:"urgente",daysFromNow:5},
-      {title:"Gerar DARF INSS e FGTS",priority:"urgente",daysFromNow:6},
-      {title:"Enviar guias para o cliente pagar",priority:"urgente",daysFromNow:7},
-    ]
-  },
-  rescisao:{
-    label:"Rescisão Trabalhista",icon:"📄",category:"rescisao",color:"#B71C1C",
-    steps:[
-      {title:"Receber comunicado de rescisão",priority:"urgente",daysFromNow:0},
-      {title:"Verificar tipo de rescisão (justa causa, pedido, acordo...)",priority:"alta",daysFromNow:1},
-      {title:"Calcular verbas rescisórias (TRCT)",priority:"urgente",daysFromNow:2},
-      {title:"Emitir guia FGTS + baixa na CTPS/eSocial",priority:"urgente",daysFromNow:3},
-      {title:"Emitir Termo de Rescisão (TRCT)",priority:"alta",daysFromNow:4},
-      {title:"Arquivar documentação da rescisão",priority:"media",daysFromNow:5},
-    ]
-  },
-  admissao:{
-    label:"Admissão de Funcionário",icon:"👤",category:"dp",color:"#6A1B9A",
-    steps:[
-      {title:"Receber documentos do novo funcionário",priority:"urgente",daysFromNow:0},
-      {title:"Verificar documentação (RG, CPF, CTPS)",priority:"alta",daysFromNow:0},
-      {title:"Registrar admissão no eSocial",priority:"urgente",daysFromNow:1},
-      {title:"Assinar contrato de trabalho",priority:"alta",daysFromNow:1},
-      {title:"Incluir na folha de pagamento",priority:"alta",daysFromNow:3},
-      {title:"Arquivar documentação de admissão",priority:"baixa",daysFromNow:5},
-    ]
-  },
-  ferias:{
-    label:"Férias de Funcionário",icon:"🏖️",category:"dp",color:"#6A1B9A",
-    steps:[
-      {title:"Verificar período aquisitivo de férias",priority:"media",daysFromNow:0},
-      {title:"Notificar funcionário com 30 dias de antecedência",priority:"alta",daysFromNow:0},
-      {title:"Calcular valores das férias + 1/3",priority:"alta",daysFromNow:5},
-      {title:"Emitir recibo de férias",priority:"alta",daysFromNow:7},
-      {title:"Pagar férias (até 2 dias antes do início)",priority:"urgente",daysFromNow:8},
-      {title:"Registrar férias no eSocial",priority:"alta",daysFromNow:9},
-    ]
-  },
+  folha:{label:"Folha de Pagamento",icon:"💼",category:"dp",color:"#6A1B9A",steps:[
+    {title:"Aguardar informações do cliente (comissão, horas extras, adicional noturno, adiantamento, faltas)",priority:"alta",daysFromNow:0},
+    {title:"Lançar variáveis no sistema",priority:"alta",daysFromNow:1},
+    {title:"Apurar e fechar a folha",priority:"urgente",daysFromNow:2},
+    {title:"Enviar para o cliente conferir",priority:"urgente",daysFromNow:3},
+    {title:"Aguardar OK do cliente",priority:"alta",daysFromNow:4},
+    {title:"Liberar holerites",priority:"urgente",daysFromNow:5},
+    {title:"Gerar DARF INSS e FGTS",priority:"urgente",daysFromNow:6},
+    {title:"Enviar guias para o cliente pagar",priority:"urgente",daysFromNow:7},
+  ]},
+  rescisao:{label:"Rescisão Trabalhista",icon:"📄",category:"rescisao",color:"#B71C1C",steps:[
+    {title:"Receber comunicado de rescisão",priority:"urgente",daysFromNow:0},
+    {title:"Verificar tipo de rescisão (justa causa, pedido, acordo...)",priority:"alta",daysFromNow:1},
+    {title:"Calcular verbas rescisórias (TRCT)",priority:"urgente",daysFromNow:2},
+    {title:"Emitir guia FGTS + baixa na CTPS/eSocial",priority:"urgente",daysFromNow:3},
+    {title:"Emitir Termo de Rescisão (TRCT)",priority:"alta",daysFromNow:4},
+    {title:"Arquivar documentação da rescisão",priority:"media",daysFromNow:5},
+  ]},
+  admissao:{label:"Admissão de Funcionário",icon:"👤",category:"dp",color:"#6A1B9A",steps:[
+    {title:"Receber documentos do novo funcionário",priority:"urgente",daysFromNow:0},
+    {title:"Verificar documentação (RG, CPF, CTPS)",priority:"alta",daysFromNow:0},
+    {title:"Registrar admissão no eSocial",priority:"urgente",daysFromNow:1},
+    {title:"Assinar contrato de trabalho",priority:"alta",daysFromNow:1},
+    {title:"Incluir na folha de pagamento",priority:"alta",daysFromNow:3},
+    {title:"Arquivar documentação de admissão",priority:"baixa",daysFromNow:5},
+  ]},
+  ferias:{label:"Férias de Funcionário",icon:"🏖️",category:"dp",color:"#6A1B9A",steps:[
+    {title:"Verificar período aquisitivo de férias",priority:"media",daysFromNow:0},
+    {title:"Notificar funcionário com 30 dias de antecedência",priority:"alta",daysFromNow:0},
+    {title:"Calcular valores das férias + 1/3",priority:"alta",daysFromNow:5},
+    {title:"Emitir recibo de férias",priority:"alta",daysFromNow:7},
+    {title:"Pagar férias (até 2 dias antes do início)",priority:"urgente",daysFromNow:8},
+    {title:"Registrar férias no eSocial",priority:"alta",daysFromNow:9},
+  ]},
 };
 
 const RECURRING_TEMPLATES=[
@@ -83,48 +70,19 @@ const RECURRING_TEMPLATES=[
   {title:"Backup de Documentos",category:"administrativo",priority:"baixa",dayOfMonth:28,notes:"Backup mensal dos arquivos digitais"},
 ];
 
-// FECHAMENTO MENSAL — EMPRESAS
-const FOLHA_ATIVA=[
-  "Acervo Chop","AutoBraz","Blindar Contagem","Cantina Freitas","Cleiton Martins","Cledson Elevadores",
-  "Control Vt","Decora","Deposito Cerveja MTZ","Di France","Espaço Presentes","Espaço Vitta Pilates",
-  "Flavia FSA","FOCO","Ge Car","Guindaumaq","HJ Peças","Jeovane","Ligeirinho","M&R Placas",
-  "M3 Comércio","Magnus Imóveis","Marcelo Transporte","MDC Locação","MG5","Milton Tem Tem",
-  "Natal MTZ","Natalia Mota","Nivair","OMR Entregas","Opção Locação","Opção Visual",
-  "PRONTOVET Ibirité","R&E Top Diesel","RDS","Frutos de Minas Barreiro","Frutos de Minas Barreiro FL",
-  "Rede Frutos de Minas Betim","Frutos de Minas Betim FL","Res Lealdo","Rodrigar","Rosálio Duarte",
-  "SEGUROBRAS","Stenner","Shopping das Peças","Tower","T&R"
-];
+const FOLHA_ATIVA=["Acervo Chop","AutoBraz","Blindar Contagem","Cantina Freitas","Cleiton Martins","Cledson Elevadores","Control Vt","Decora","Deposito Cerveja MTZ","Di France","Espaço Presentes","Espaço Vitta Pilates","Flavia FSA","FOCO","Ge Car","Guindaumaq","HJ Peças","Jeovane","Ligeirinho","M&R Placas","M3 Comércio","Magnus Imóveis","Marcelo Transporte","MDC Locação","MG5","Milton Tem Tem","Natal MTZ","Natalia Mota","Nivair","OMR Entregas","Opção Locação","Opção Visual","PRONTOVET Ibirité","R&E Top Diesel","RDS","Frutos de Minas Barreiro","Frutos de Minas Barreiro FL","Rede Frutos de Minas Betim","Frutos de Minas Betim FL","Res Lealdo","Rodrigar","Rosálio Duarte","SEGUROBRAS","Stenner","Shopping das Peças","Tower","T&R"];
 const DOMESTICAS=["Elza Maria","Maria dos Anjos","Leonídia","Eliane","Eduardo Freitas","Sandra","Geraldo"];
-const SEM_MOVIMENTO=[
-  "Antonio Clareti","Blindar Ibirité","By Tracker","CT Treinamento","Deposito Cerveja FL",
-  "EABorges","Heleno","Marc Textil","Merc. Manhumirim","Natal FL","NetForce","Piazza Peças",
-  "Pulga Car","Quintal Fornalha","Protagon","PROFISS","Ramon Carvalho MEI","RDL Holding",
-  "Tiago Alves","Valente"
-];
+const SEM_MOVIMENTO=["Antonio Clareti","Blindar Ibirité","By Tracker","CT Treinamento","Deposito Cerveja FL","EABorges","Heleno","Marc Textil","Merc. Manhumirim","Natal FL","NetForce","Piazza Peças","Pulga Car","Quintal Fornalha","Protagon","PROFISS","Ramon Carvalho MEI","RDL Holding","Tiago Alves","Valente"];
 const FOLHA_COLS=["Folha","DARF","FGTS","Adiantamento","REINF","eCons"];
 const DOM_COLS=["Folha","Guia","Status"];
 const STATUS_CYCLE=["pendente","andamento","entregue"];
 const STATUS_ICON={"pendente":"⬜","andamento":"🟡","entregue":"✅"};
 
-function getCurrentMonthKey(){ const n=new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}`; }
-function getFechamentoKey(){ return `fechamento_${getCurrentMonthKey()}`; }
-function buildInitialFechamento(){
-  const folha={};
-  FOLHA_ATIVA.forEach(e=>{
-    folha[e]={};
-    FOLHA_COLS.forEach(c=>{ folha[e][c]={status:"pendente",via:"",data:""}; });
-  });
-  const dom={};
-  DOMESTICAS.forEach(e=>{ dom[e]={}; DOM_COLS.forEach(c=>{ dom[e][c]={status:"pendente"}; }); });
-  const sem={};
-  SEM_MOVIMENTO.forEach(e=>{ sem[e]={conferido:false}; });
-  return {folha,dom,sem,monthKey:getCurrentMonthKey()};
-}
+function getCurrentMonthKey(){const n=new Date();return`${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}`;}
+function normalizeStr(s){return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9 ]/g," ").trim();}
+function fuzzyMatch(query,target){const q=normalizeStr(query);const t=normalizeStr(target);if(t.includes(q)||q.includes(t))return true;const qw=q.split(" ").filter(x=>x.length>2);return qw.length>0&&qw.every(w=>t.includes(w));}
 
-function normalizeStr(s){ return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9 ]/g," ").trim(); }
-function fuzzyMatch(query,target){ const q=normalizeStr(query); const t=normalizeStr(target); if(t.includes(q)||q.includes(t))return true; const qw=q.split(" ").filter(x=>x.length>2); return qw.length>0&&qw.every(w=>t.includes(w)); }
-
-const today=new Date(); today.setHours(0,0,0,0);
+const today=new Date();today.setHours(0,0,0,0);
 const todayStr=today.toISOString().split("T")[0];
 function addDays(d,n){const x=new Date(d);x.setDate(x.getDate()+n);return x;}
 function fmtDate(d){return d.toISOString().split("T")[0];}
@@ -157,154 +115,187 @@ export default function App(){
   const [templateClient,setTemplateClient]=useState("");
   const [recurringClient,setRecurringClient]=useState("");
   const [selectedRecurring,setSelectedRecurring]=useState([]);
-  const [fechamento,setFechamento]=useState(null);
   const [fechaView,setFechaView]=useState("folha");
   const [listening,setListening]=useState(false);
   const [voiceLog,setVoiceLog]=useState("");
+  const [fechaData,setFechaData]=useState({});
+  const [fechaLoading,setFechaLoading]=useState(false);
   const recognitionRef=useRef(null);
+  const monthKey=getCurrentMonthKey();
   const emptyForm={title:"",category:"dp",priority:"media",due:todayStr,client:"",notes:"",created_at:todayStr,completed_at:""};
   const [form,setForm]=useState(emptyForm);
 
-  useEffect(()=>{fetchTasks();loadFechamento();},[]);
+  useEffect(()=>{fetchTasks();fetchFechamento();},[]);
 
+  // ── TAREFAS ──
   async function fetchTasks(){
     setLoading(true);
     const{data}=await supabase.from("tasks").select("*").order("due",{ascending:true});
     setTasks(data||[]);setLoading(false);
   }
 
-  function loadFechamento(){
-    const key=getFechamentoKey();
-    const stored=localStorage.getItem(key);
-    if(stored){
-      const parsed=JSON.parse(stored);
-      if(parsed.monthKey===getCurrentMonthKey()){setFechamento(parsed);return;}
+  // ── FECHAMENTO — SUPABASE ──
+  async function fetchFechamento(){
+    setFechaLoading(true);
+    const{data}=await supabase.from("fechamento_mensal").select("*").eq("month_key",monthKey);
+    const map={};
+    (data||[]).forEach(r=>{
+      if(!map[r.tipo])map[r.tipo]={};
+      if(!map[r.tipo][r.empresa])map[r.tipo][r.empresa]={};
+      map[r.tipo][r.empresa][r.coluna]={status:r.status,via:r.via,data_entrega:r.data_entrega,id:r.id};
+    });
+    setFechaData(map);
+    setFechaLoading(false);
+  }
+
+  async function upsertFecha(tipo,empresa,coluna,status,via="",data_entrega=""){
+    const existing=fechaData?.[tipo]?.[empresa]?.[coluna];
+    const payload={month_key:monthKey,tipo,empresa,coluna,status,via,data_entrega,updated_at:new Date().toISOString()};
+    if(existing?.id){
+      await supabase.from("fechamento_mensal").update(payload).eq("id",existing.id);
+    } else {
+      await supabase.from("fechamento_mensal").insert([payload]);
     }
-    const fresh=buildInitialFechamento();
-    localStorage.setItem(key,JSON.stringify(fresh));
-    setFechamento(fresh);
+    await fetchFechamento();
   }
 
-  function saveFechamento(updated){
-    const key=getFechamentoKey();
-    localStorage.setItem(key,JSON.stringify(updated));
-    setFechamento({...updated});
+  function getFechaCell(tipo,empresa,coluna){
+    return fechaData?.[tipo]?.[empresa]?.[coluna]||{status:"pendente",via:"",data_entrega:""};
   }
 
-  function cycleFolhaStatus(empresa,col){
-    const f={...fechamento};
-    const cur=f.folha[empresa][col].status;
-    const next=STATUS_CYCLE[(STATUS_CYCLE.indexOf(cur)+1)%STATUS_CYCLE.length];
-    const data=next==="entregue"?new Date().toLocaleDateString("pt-BR"):"";
-    f.folha[empresa][col]={...f.folha[empresa][col],status:next,data};
-    saveFechamento(f);
+  async function cycleFolhaStatus(empresa,col){
+    const cell=getFechaCell("folha",empresa,col);
+    const next=STATUS_CYCLE[(STATUS_CYCLE.indexOf(cell.status)+1)%STATUS_CYCLE.length];
+    const data_entrega=next==="entregue"?new Date().toLocaleDateString("pt-BR"):"";
+    await upsertFecha("folha",empresa,col,next,cell.via||"",data_entrega);
   }
 
-  function setFolhaVia(empresa,col,via){
-    const f={...fechamento};
-    f.folha[empresa][col]={...f.folha[empresa][col],via};
-    saveFechamento(f);
+  async function setFolhaVia(empresa,col,via){
+    const cell=getFechaCell("folha",empresa,col);
+    await upsertFecha("folha",empresa,col,cell.status,via,cell.data_entrega||"");
   }
 
-  function cycleDomStatus(empresa,col){
-    const f={...fechamento};
-    const cur=f.dom[empresa][col].status;
-    const next=STATUS_CYCLE[(STATUS_CYCLE.indexOf(cur)+1)%STATUS_CYCLE.length];
-    f.dom[empresa][col]={status:next};
-    saveFechamento(f);
+  async function cycleDomStatus(empresa,col){
+    const cell=getFechaCell("dom",empresa,col);
+    const next=STATUS_CYCLE[(STATUS_CYCLE.indexOf(cell.status)+1)%STATUS_CYCLE.length];
+    await upsertFecha("dom",empresa,col,next,"","");
   }
 
-  function toggleSem(empresa){
-    const f={...fechamento};
-    f.sem[empresa].conferido=!f.sem[empresa].conferido;
-    saveFechamento(f);
+  async function toggleSem(empresa){
+    const cell=getFechaCell("sem",empresa,"conferido");
+    const next=cell.status==="entregue"?"pendente":"entregue";
+    await upsertFecha("sem",empresa,"conferido",next,"","");
   }
 
-  function resetFechamento(){
-    const fresh=buildInitialFechamento();
-    const key=getFechamentoKey();
-    localStorage.setItem(key,JSON.stringify(fresh));
-    setFechamento(fresh);
+  async function resetFechamento(){
+    await supabase.from("fechamento_mensal").delete().eq("month_key",monthKey);
+    await fetchFechamento();
     showToast("Painel resetado para novo ciclo!");
   }
 
-  // VOZ
+  // ── VOZ MELHORADA ──
   function startVoice(){
     const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(!SpeechRecognition){showToast("Navegador não suporta voz","err");return;}
+    if(!SpeechRecognition){showToast("Use o Google Chrome para comando de voz","err");return;}
+    if(recognitionRef.current){try{recognitionRef.current.stop();}catch(e){}}
     const r=new SpeechRecognition();
-    r.lang="pt-BR"; r.continuous=false; r.interimResults=false;
-    r.onstart=()=>setListening(true);
+    r.lang="pt-BR";
+    r.continuous=false;
+    r.interimResults=false;
+    r.maxAlternatives=3;
+    r.onstart=()=>{setListening(true);setVoiceLog("Ouvindo... fale o comando agora");};
     r.onend=()=>setListening(false);
-    r.onerror=()=>{setListening(false);showToast("Erro no microfone","err");};
+    r.onerror=(e)=>{
+      setListening(false);
+      if(e.error==="not-allowed")showToast("Permita o microfone nas configurações do navegador","err");
+      else if(e.error==="no-speech")showToast("Nenhuma fala detectada. Tente novamente.","err");
+      else showToast(`Erro: ${e.error}`,"err");
+    };
     r.onresult=(e)=>{
-      const txt=e.results[0][0].transcript.toLowerCase();
-      setVoiceLog(`"${txt}"`);
-      processVoiceCommand(txt);
+      const results=Array.from(e.results[0]).map(r=>r.transcript.toLowerCase());
+      setVoiceLog(`Entendido: "${results[0]}"`);
+      let matched=false;
+      for(const txt of results){
+        if(processVoiceCommand(txt)){matched=true;break;}
+      }
+      if(!matched)showToast(`Não entendi. Tente: "Marcar [empresa] folha entregue"`,"err");
     };
     recognitionRef.current=r;
-    r.start();
+    try{r.start();}catch(e){showToast("Erro ao iniciar microfone","err");}
   }
 
   function processVoiceCommand(txt){
-    const f={...fechamento};
+    const colMap={folha:"Folha",darf:"DARF",fgts:"FGTS",adiantamento:"Adiantamento",reinf:"REINF",econs:"eCons",econ:"eCons","e cons":"eCons"};
     let matched=false;
 
     // "tudo entregue"
-    const tudoMatch=txt.match(/(.+?)\s+tudo entregue/);
+    const tudoMatch=txt.match(/(.+?)\s+tudo\s+entregue/);
     if(tudoMatch){
       const q=tudoMatch[1].trim();
-      FOLHA_ATIVA.forEach(emp=>{
+      FOLHA_ATIVA.forEach(async emp=>{
         if(fuzzyMatch(q,emp)){
-          FOLHA_COLS.forEach(col=>{
-            f.folha[emp][col]={status:"entregue",via:f.folha[emp][col].via,data:new Date().toLocaleDateString("pt-BR")};
-          });
-          matched=true;
+          for(const col of FOLHA_COLS){
+            await upsertFecha("folha",emp,col,"entregue","",new Date().toLocaleDateString("pt-BR"));
+          }
           showToast(`✅ ${emp} — tudo entregue!`);
+          matched=true;
         }
       });
     }
 
-    // "via whatsapp" ou "adiantamento whatsapp"
-    const viaMatch=txt.match(/(.+?)\s+(adiantamento|folha|darf|fgts|reinf|econs?)\s+(whatsapp|email|e-mail)/);
+    // "via whatsapp ou email"
+    const viaMatch=txt.match(/(.+?)\s+(folha|darf|fgts|adiantamento|reinf|econs?|e cons)\s+(whatsapp|whats|email|e-mail|e mail)/);
     if(!matched&&viaMatch){
       const q=viaMatch[1].trim();
-      const colRaw=viaMatch[2];
+      const colRaw=viaMatch[2].replace(" ","");
       const viaRaw=viaMatch[3];
-      const colMap={adiantamento:"Adiantamento",folha:"Folha",darf:"DARF",fgts:"FGTS",reinf:"REINF",econs:"eCons",econ:"eCons"};
       const col=colMap[colRaw]||null;
       const via=viaRaw.includes("whats")?"WhatsApp":"E-mail";
       if(col){
-        FOLHA_ATIVA.forEach(emp=>{
+        FOLHA_ATIVA.forEach(async emp=>{
           if(fuzzyMatch(q,emp)){
-            f.folha[emp][col]={status:"entregue",via,data:new Date().toLocaleDateString("pt-BR")};
-            matched=true;
+            await upsertFecha("folha",emp,col,"entregue",via,new Date().toLocaleDateString("pt-BR"));
             showToast(`✅ ${emp} — ${col} via ${via}`);
+            matched=true;
           }
         });
       }
     }
 
     // "marcar X coluna entregue"
-    const marcarMatch=txt.match(/marcar\s+(.+?)\s+(folha|darf|fgts|adiantamento|reinf|econs?)\s+entregue/);
+    const marcarMatch=txt.match(/marcar\s+(.+?)\s+(folha|darf|fgts|adiantamento|reinf|econs?|e cons)\s+entregue/);
     if(!matched&&marcarMatch){
       const q=marcarMatch[1].trim();
-      const colRaw=marcarMatch[2];
-      const colMap={folha:"Folha",darf:"DARF",fgts:"FGTS",adiantamento:"Adiantamento",reinf:"REINF",econs:"eCons",econ:"eCons"};
+      const colRaw=marcarMatch[2].replace(" ","");
       const col=colMap[colRaw]||null;
       if(col){
-        FOLHA_ATIVA.forEach(emp=>{
+        FOLHA_ATIVA.forEach(async emp=>{
           if(fuzzyMatch(q,emp)){
-            f.folha[emp][col]={status:"entregue",via:f.folha[emp][col].via,data:new Date().toLocaleDateString("pt-BR")};
-            matched=true;
+            await upsertFecha("folha",emp,col,"entregue","",new Date().toLocaleDateString("pt-BR"));
             showToast(`✅ ${emp} — ${col} entregue`);
+            matched=true;
           }
         });
       }
     }
 
-    if(!matched)showToast(`Não entendi: ${txt}`,"err");
-    else saveFechamento(f);
+    // "X coluna entregue" (sem "marcar")
+    const simpleMatch=txt.match(/(.+?)\s+(folha|darf|fgts|adiantamento|reinf|econs?)\s+entregue/);
+    if(!matched&&simpleMatch){
+      const q=simpleMatch[1].trim();
+      const col=colMap[simpleMatch[2]]||null;
+      if(col){
+        FOLHA_ATIVA.forEach(async emp=>{
+          if(fuzzyMatch(q,emp)){
+            await upsertFecha("folha",emp,col,"entregue","",new Date().toLocaleDateString("pt-BR"));
+            showToast(`✅ ${emp} — ${col} entregue`);
+            matched=true;
+          }
+        });
+      }
+    }
+
+    return matched;
   }
 
   function showToast(msg,type="ok"){setToast({msg,type});setTimeout(()=>setToast(null),3500);}
@@ -370,7 +361,6 @@ export default function App(){
 
   const weekTasksFor=(ds)=>tasks.filter(t=>!t.done&&t.due===ds).sort((a,b)=>scoreTask(b)-scoreTask(a));
   const allFiltered=useMemo(()=>[...pending].filter(t=>filterCat==="all"||t.category===filterCat).filter(t=>filterPri==="all"||t.priority===filterPri).sort((a,b)=>scoreTask(b)-scoreTask(a)),[tasks,filterCat,filterPri]);
-
   const clientPanel=useMemo(()=>{
     const filtered=filterClient==="all"?pending:pending.filter(t=>t.client===filterClient);
     const grouped={};
@@ -428,8 +418,8 @@ export default function App(){
 
   return(
     <div style={S.root}>
-      <style>{`.tc:hover{box-shadow:0 2px 10px rgba(21,101,192,.10)} .cell-btn:hover{opacity:.8}`}</style>
-      {toast&&<div style={{position:"fixed",bottom:20,right:20,zIndex:999,background:toast.type==="err"?RED:BLUE,color:"#fff",borderRadius:10,padding:"10px 16px",fontSize:12.5,fontWeight:600,boxShadow:"0 4px 16px rgba(0,0,0,.2)"}}>{toast.msg}</div>}
+      <style>{`.tc:hover{box-shadow:0 2px 10px rgba(21,101,192,.10)} .cell-btn:hover{opacity:.75;transform:scale(1.15)}`}</style>
+      {toast&&<div style={{position:"fixed",bottom:20,right:20,zIndex:999,background:toast.type==="err"?RED:BLUE,color:"#fff",borderRadius:10,padding:"10px 16px",fontSize:12.5,fontWeight:600,boxShadow:"0 4px 16px rgba(0,0,0,.2)",maxWidth:320}}>{toast.msg}</div>}
 
       {/* HEADER */}
       <div style={S.header}>
@@ -460,21 +450,14 @@ export default function App(){
           ))}
         </div>
 
-        {/* ── HOJE ── */}
+        {/* HOJE */}
         {view==="agenda"&&<>
           <div style={S.section}>Agenda de Hoje</div>
-          <div style={S.sub}>
-            {today.toLocaleDateString("pt-BR",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}
-            {todayTasks.filter(t=>diffDays(t.due)>0).length>0&&
-              <span style={{marginLeft:8,background:"#FFF3E0",color:"#E65100",borderRadius:5,padding:"2px 7px",fontSize:10,fontWeight:600}}>
-                ⚡ {todayTasks.filter(t=>diffDays(t.due)>0).length} urgente(s) dos próx. 7 dias
-              </span>}
-          </div>
-          {todayTasks.length===0?<Empty icon="🎉" msg="Nenhuma tarefa urgente para hoje!"/>
-            :todayTasks.map((t,i)=><Card key={t.id} t={t} i={i} S={S} onToggle={()=>toggleDone(t)} onEdit={()=>openEdit(t)} onDelete={()=>deleteTask(t.id)}/>)}
+          <div style={S.sub}>{today.toLocaleDateString("pt-BR",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}{todayTasks.filter(t=>diffDays(t.due)>0).length>0&&<span style={{marginLeft:8,background:"#FFF3E0",color:"#E65100",borderRadius:5,padding:"2px 7px",fontSize:10,fontWeight:600}}>⚡ {todayTasks.filter(t=>diffDays(t.due)>0).length} urgente(s) dos próx. 7 dias</span>}</div>
+          {todayTasks.length===0?<Empty icon="🎉" msg="Nenhuma tarefa urgente para hoje!"/>:todayTasks.map((t,i)=><Card key={t.id} t={t} i={i} S={S} onToggle={()=>toggleDone(t)} onEdit={()=>openEdit(t)} onDelete={()=>deleteTask(t.id)}/>)}
         </>}
 
-        {/* ── SEMANA ── */}
+        {/* SEMANA */}
         {view==="semana"&&<>
           <div style={S.section}>Agenda da Semana</div>
           <div style={S.sub}>{weekStart.toLocaleDateString("pt-BR",{day:"numeric",month:"short"})} – {addDays(weekStart,6).toLocaleDateString("pt-BR",{day:"numeric",month:"short",year:"numeric"})}</div>
@@ -487,21 +470,16 @@ export default function App(){
                   {dt.map(t=><div key={t.id} style={{background:CATEGORIES[t.category]?.bg||BLUE_LIGHT,color:CATEGORIES[t.category]?.color||BLUE,borderRadius:3,padding:"2px 3px",fontSize:8.5,lineHeight:1.3,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{CATEGORIES[t.category]?.icon} {t.title}</div>)}
                   {dt.length===0&&<div style={{fontSize:9,color:"#C5CAD8",textAlign:"center",marginTop:4}}>—</div>}
                 </div>
-              </div>);
-            })}
+              </div>);})}
           </div>
           {weekDays.map((day,i)=>{const ds=fmtDate(day);const dt=weekTasksFor(ds);if(!dt.length)return null;const isToday=ds===todayStr;
             return(<div key={ds} style={{marginBottom:12}}>
-              <div style={{fontSize:11,fontWeight:700,color:isToday?BLUE:TEXT2,marginBottom:6,display:"flex",alignItems:"center",gap:5}}>
-                {WFULL[i]}, {day.toLocaleDateString("pt-BR",{day:"numeric",month:"short"})}
-                {isToday&&<span style={{fontSize:9,background:BLUE_LIGHT,color:BLUE,borderRadius:4,padding:"1px 5px"}}>HOJE</span>}
-              </div>
+              <div style={{fontSize:11,fontWeight:700,color:isToday?BLUE:TEXT2,marginBottom:6,display:"flex",alignItems:"center",gap:5}}>{WFULL[i]}, {day.toLocaleDateString("pt-BR",{day:"numeric",month:"short"})}{isToday&&<span style={{fontSize:9,background:BLUE_LIGHT,color:BLUE,borderRadius:4,padding:"1px 5px"}}>HOJE</span>}</div>
               {dt.map((t,i)=><Card key={t.id} t={t} i={i} S={S} compact onToggle={()=>toggleDone(t)} onEdit={()=>openEdit(t)} onDelete={()=>deleteTask(t.id)}/>)}
-            </div>);
-          })}
+            </div>);})}
         </>}
 
-        {/* ── MÊS ── */}
+        {/* MÊS */}
         {view==="mes"&&<>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
             <div style={S.section}>Panorama Mensal</div>
@@ -514,9 +492,7 @@ export default function App(){
           </div>
           <div style={S.sub}>Visão completa do mês</div>
           <div style={{background:"#fff",border:`1px solid ${BORDER}`,borderRadius:10,padding:11,marginBottom:16}}>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:4}}>
-              {WDAYS.map(d=><div key={d} style={{textAlign:"center",fontSize:9,fontWeight:600,color:TEXT2,padding:"3px 0"}}>{d}</div>)}
-            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:4}}>{WDAYS.map(d=><div key={d} style={{textAlign:"center",fontSize:9,fontWeight:600,color:TEXT2,padding:"3px 0"}}>{d}</div>)}</div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}}>
               {Array.from({length:offsetInicio},(_,i)=><div key={"e"+i}/>)}
               {mesDias.map(d=>{const ds=mesDateStr(d);const dt=mesTasksFor(ds);const isToday=ds===todayStr;const isPast=ds<todayStr;const temUrg=dt.some(t=>t.priority==="urgente");const temAlta=dt.some(t=>t.priority==="alta");
@@ -526,23 +502,18 @@ export default function App(){
                   {dt.length>2&&<div style={{fontSize:7,color:TEXT2}}>+{dt.length-2}</div>}
                   {temUrg&&<div style={{position:"absolute",top:2,right:2,width:5,height:5,borderRadius:"50%",background:RED}}/>}
                   {!temUrg&&temAlta&&<div style={{position:"absolute",top:2,right:2,width:5,height:5,borderRadius:"50%",background:"#E65100"}}/>}
-                </div>);
-              })}
+                </div>);})}
             </div>
           </div>
           {mesDias.map(d=>{const ds=mesDateStr(d);const dt=mesTasksFor(ds);if(!dt.length)return null;const isToday=ds===todayStr;
             return(<div key={d} style={{marginBottom:11}}>
-              <div style={{fontSize:10.5,fontWeight:700,color:isToday?BLUE:TEXT2,marginBottom:5,display:"flex",alignItems:"center",gap:5}}>
-                {WFULL[new Date(ds+"T12:00:00").getDay()===0?6:new Date(ds+"T12:00:00").getDay()-1]}, {ptDate(ds)}
-                {isToday&&<span style={{fontSize:8.5,background:BLUE_LIGHT,color:BLUE,borderRadius:4,padding:"1px 5px"}}>HOJE</span>}
-              </div>
+              <div style={{fontSize:10.5,fontWeight:700,color:isToday?BLUE:TEXT2,marginBottom:5,display:"flex",alignItems:"center",gap:5}}>{WFULL[new Date(ds+"T12:00:00").getDay()===0?6:new Date(ds+"T12:00:00").getDay()-1]}, {ptDate(ds)}{isToday&&<span style={{fontSize:8.5,background:BLUE_LIGHT,color:BLUE,borderRadius:4,padding:"1px 5px"}}>HOJE</span>}</div>
               {dt.map((t,i)=><Card key={t.id} t={t} i={i} S={S} compact onToggle={()=>toggleDone(t)} onEdit={()=>openEdit(t)} onDelete={()=>deleteTask(t.id)}/>)}
-            </div>);
-          })}
+            </div>);})}
           {!mesDias.some(d=>mesTasksFor(mesDateStr(d)).length>0)&&<Empty icon="📅" msg={`Nenhuma tarefa em ${mesNome}.`}/>}
         </>}
 
-        {/* ── CLIENTES ── */}
+        {/* CLIENTES */}
         {view==="clientes"&&<>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,flexWrap:"wrap",gap:8}}>
             <div style={S.section}>Painel por Cliente</div>
@@ -567,11 +538,10 @@ export default function App(){
                 </div>
               </div>
               {ctasks.map((t,i)=><Card key={t.id} t={t} i={i} S={S} compact onToggle={()=>toggleDone(t)} onEdit={()=>openEdit(t)} onDelete={()=>deleteTask(t.id)}/>)}
-            </div>);
-          })}
+            </div>);})}
         </>}
 
-        {/* ── TAREFAS ── */}
+        {/* TAREFAS */}
         {view==="tarefas"&&<>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,flexWrap:"wrap",gap:8}}>
             <div style={S.section}>Todas as Tarefas</div>
@@ -589,19 +559,13 @@ export default function App(){
           {allFiltered.length===0?<Empty icon="🔍" msg="Nenhuma tarefa encontrada."/>:allFiltered.map((t,i)=><Card key={t.id} t={t} i={i} S={S} showDates onToggle={()=>toggleDone(t)} onEdit={()=>openEdit(t)} onDelete={()=>deleteTask(t.id)}/>)}
           {done.length>0&&(
             <div style={{marginTop:18}}>
-              <div style={{fontSize:11,fontWeight:600,color:TEXT2,textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:6,cursor:"pointer",display:"flex",alignItems:"center",gap:5}} onClick={()=>setShowDone(v=>!v)}>
-                ✅ Concluídas ({done.length}) {showDone?"▲":"▼"}
-              </div>
+              <div style={{fontSize:11,fontWeight:600,color:TEXT2,textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:6,cursor:"pointer",display:"flex",alignItems:"center",gap:5}} onClick={()=>setShowDone(v=>!v)}>✅ Concluídas ({done.length}) {showDone?"▲":"▼"}</div>
               {showDone&&done.map(t=>(
                 <div key={t.id} style={{background:"#fff",border:`1px solid ${BORDER}`,borderRadius:9,padding:"8px 12px",display:"flex",alignItems:"center",gap:8,marginBottom:5,opacity:.55}}>
                   <span onClick={()=>toggleDone(t)} style={S.doneDot}>✓</span>
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontSize:12,textDecoration:"line-through",color:TEXT2}}>{t.title}</div>
-                    <div style={{fontSize:10,color:"#B0B8CC",marginTop:2}}>
-                      {t.client&&<span style={{marginRight:8}}>👤 {t.client}</span>}
-                      <span>Entrada: {ptDate(t.created_at)}</span>
-                      {t.completed_at&&<span style={{marginLeft:8}}>Concluída: {ptDate(t.completed_at)}</span>}
-                    </div>
+                    <div style={{fontSize:10,color:"#B0B8CC",marginTop:2}}>{t.client&&<span style={{marginRight:8}}>👤 {t.client}</span>}<span>Entrada: {ptDate(t.created_at)}</span>{t.completed_at&&<span style={{marginLeft:8}}>Concluída: {ptDate(t.completed_at)}</span>}</div>
                   </div>
                   <span onClick={()=>deleteTask(t.id)} style={{cursor:"pointer",color:"#C5CAD8",fontSize:12}}>✕</span>
                 </div>
@@ -610,7 +574,7 @@ export default function App(){
           )}
         </>}
 
-        {/* ── MAPA ── */}
+        {/* MAPA */}
         {view==="mapa"&&<>
           <div style={S.section}>Mapa de Prazos e Prioridades</div>
           <div style={S.sub}>Visão geral por categoria</div>
@@ -624,133 +588,136 @@ export default function App(){
                   {t.client&&<span style={{fontSize:10,color:TEXT2}}>👤 {t.client}</span>}
                   <span style={{fontSize:10,background:st.bg,color:st.color,borderRadius:5,padding:"2px 6px",fontWeight:600}}>{st.label}</span>
                   <span style={{fontSize:10,color:TEXT2}}>prazo {ptDate(t.due)}</span>
-                </div>);
-              })}
-            </div>);
-          })}
+                </div>);})}
+            </div>);})}
           {pending.length===0&&<Empty icon="🎯" msg="Sem tarefas pendentes." sub="Você está em dia!"/>}
         </>}
 
-        {/* ── FECHAMENTO MENSAL ── */}
-        {view==="fechamento"&&fechamento&&<>
+        {/* FECHAMENTO MENSAL */}
+        {view==="fechamento"&&<>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,flexWrap:"wrap",gap:8}}>
-            <div style={S.section}>📁 Fechamento Mensal — {MONTHS_PT[new Date().getMonth()]} {new Date().getFullYear()}</div>
+            <div style={S.section}>📁 Fechamento — {MONTHS_PT[new Date().getMonth()]} {new Date().getFullYear()}</div>
             <div style={{display:"flex",gap:6,alignItems:"center"}}>
-              {/* MICROFONE */}
-              <button onClick={startVoice} style={{background:listening?"#E65100":BLUE,color:"#fff",border:"none",borderRadius:7,padding:"6px 12px",fontSize:11.5,fontWeight:700,fontFamily:"inherit",cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
+              <button onClick={startVoice} style={{background:listening?"#C62828":BLUE,color:"#fff",border:"none",borderRadius:7,padding:"6px 12px",fontSize:11.5,fontWeight:700,fontFamily:"inherit",cursor:"pointer",display:"flex",alignItems:"center",gap:5,animation:listening?"pulse 1s infinite":"none"}}>
                 {listening?"🔴 Ouvindo...":"🎤 Voz"}
               </button>
-              <button onClick={resetFechamento} style={{background:"#fff",border:`1px solid ${BORDER}`,color:TEXT2,borderRadius:7,padding:"6px 10px",fontSize:11,fontFamily:"inherit",cursor:"pointer"}}>🔄 Novo Ciclo</button>
+              <button onClick={()=>{if(window.confirm("Resetar painel e começar novo ciclo?"))resetFechamento();}} style={{background:"#fff",border:`1px solid ${BORDER}`,color:TEXT2,borderRadius:7,padding:"6px 10px",fontSize:11,fontFamily:"inherit",cursor:"pointer"}}>🔄 Novo Ciclo</button>
+              <button onClick={fetchFechamento} style={{background:"#fff",border:`1px solid ${BORDER}`,color:BLUE,borderRadius:7,padding:"6px 10px",fontSize:11,fontFamily:"inherit",cursor:"pointer"}}>↻ Atualizar</button>
             </div>
           </div>
-          {voiceLog&&<div style={{background:"#FFF3E0",border:"1px solid #FFCC80",borderRadius:7,padding:"6px 12px",fontSize:11.5,color:"#E65100",marginBottom:10}}>🎤 Comando: {voiceLog}</div>}
 
-          {/* SUB-ABAS */}
-          <div style={{display:"flex",gap:4,marginBottom:14}}>
-            {[["folha","📋 Folha Ativa"],["dom","🏠 Domésticas"],["sem","📁 Sem Movimento"]].map(([v,l])=>(
-              <button key={v} style={{background:fechaView===v?BLUE:"#fff",color:fechaView===v?"#fff":TEXT2,border:`1px solid ${fechaView===v?BLUE:BORDER}`,borderRadius:7,padding:"6px 14px",fontSize:12,fontFamily:"inherit",fontWeight:500,cursor:"pointer"}} onClick={()=>setFechaView(v)}>{l}</button>
-            ))}
+          {/* DICAS DE VOZ */}
+          <div style={{background:"#F3E5F5",border:"1px solid #CE93D8",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:11,color:"#6A1B9A"}}>
+            <strong>🎤 Comandos de voz:</strong> "Marcar AutoBraz folha entregue" · "Tower tudo entregue" · "Ligeirinho FGTS WhatsApp"
           </div>
 
-          {/* FOLHA ATIVA */}
-          {fechaView==="folha"&&(
-            <div style={{background:"#fff",border:`1px solid ${BORDER}`,borderRadius:10,overflow:"auto"}}>
-              <table style={{width:"100%",borderCollapse:"collapse",fontSize:11.5}}>
-                <thead>
-                  <tr style={{background:BLUE_LIGHT,borderBottom:`2px solid ${BLUE}`}}>
-                    <th style={{padding:"8px 10px",textAlign:"left",color:BLUE,fontWeight:700,fontSize:11,minWidth:140,position:"sticky",left:0,background:BLUE_LIGHT}}>Empresa</th>
-                    {FOLHA_COLS.map(c=><th key={c} style={{padding:"8px 8px",textAlign:"center",color:BLUE,fontWeight:700,fontSize:11,minWidth:90}}>{c}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {FOLHA_ATIVA.map((emp,idx)=>{
-                    const row=fechamento.folha[emp]||{};
-                    const allDone=FOLHA_COLS.every(c=>row[c]?.status==="entregue");
-                    return(
-                      <tr key={emp} style={{borderBottom:`1px solid ${BORDER}`,background:allDone?"#F1FBF4":idx%2===0?"#FAFBFF":"#fff"}}>
-                        <td style={{padding:"7px 10px",fontWeight:500,color:TEXT,position:"sticky",left:0,background:allDone?"#F1FBF4":idx%2===0?"#FAFBFF":"#fff",fontSize:11.5}}>{emp}</td>
-                        {FOLHA_COLS.map(col=>{
-                          const cell=row[col]||{status:"pendente",via:"",data:""};
-                          const isEntregue=cell.status==="entregue";
-                          return(
-                            <td key={col} style={{padding:"5px 6px",textAlign:"center",verticalAlign:"middle"}}>
-                              <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
-                                <span className="cell-btn" onClick={()=>cycleFolhaStatus(emp,col)} style={{fontSize:14,cursor:"pointer",title:"Clique para avançar status"}}>{STATUS_ICON[cell.status]}</span>
-                                {isEntregue&&(
-                                  <select value={cell.via||""} onChange={e=>setFolhaVia(emp,col,e.target.value)} style={{fontSize:8.5,border:`1px solid ${BORDER}`,borderRadius:3,padding:"1px 2px",background:GRAY,color:TEXT2,cursor:"pointer"}}>
-                                    <option value="">via?</option>
-                                    <option value="E-mail">E-mail</option>
-                                    <option value="WhatsApp">WhatsApp</option>
-                                  </select>
-                                )}
-                                {isEntregue&&cell.data&&<span style={{fontSize:8,color:TEXT2}}>{cell.data}</span>}
-                              </div>
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              <div style={{padding:"8px 12px",fontSize:10,color:TEXT2,borderTop:`1px solid ${BORDER}`}}>
-                ⬜ Pendente → 🟡 Em andamento → ✅ Entregue &nbsp;|&nbsp; Clique no ícone para avançar o status
+          {voiceLog&&<div style={{background:"#E3F0FF",border:`1px solid ${BLUE}`,borderRadius:7,padding:"6px 12px",fontSize:11.5,color:BLUE,marginBottom:10}}>🎤 {voiceLog}</div>}
+
+          {fechaLoading&&<div style={{textAlign:"center",padding:"20px",color:TEXT2,fontSize:13}}>Carregando painel...</div>}
+
+          {!fechaLoading&&<>
+            {/* SUB-ABAS */}
+            <div style={{display:"flex",gap:4,marginBottom:14}}>
+              {[["folha","📋 Folha Ativa ("+FOLHA_ATIVA.length+")"],["dom","🏠 Domésticas"],["sem","📁 Sem Movimento"]].map(([v,l])=>(
+                <button key={v} style={{background:fechaView===v?BLUE:"#fff",color:fechaView===v?"#fff":TEXT2,border:`1px solid ${fechaView===v?BLUE:BORDER}`,borderRadius:7,padding:"6px 14px",fontSize:12,fontFamily:"inherit",fontWeight:500,cursor:"pointer"}} onClick={()=>setFechaView(v)}>{l}</button>
+              ))}
+            </div>
+
+            {/* FOLHA ATIVA */}
+            {fechaView==="folha"&&(
+              <div style={{background:"#fff",border:`1px solid ${BORDER}`,borderRadius:10,overflow:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:11.5}}>
+                  <thead>
+                    <tr style={{background:BLUE_LIGHT,borderBottom:`2px solid ${BLUE}`}}>
+                      <th style={{padding:"8px 10px",textAlign:"left",color:BLUE,fontWeight:700,fontSize:11,minWidth:150,position:"sticky",left:0,background:BLUE_LIGHT}}>Empresa</th>
+                      {FOLHA_COLS.map(c=><th key={c} style={{padding:"8px 8px",textAlign:"center",color:BLUE,fontWeight:700,fontSize:11,minWidth:85}}>{c}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {FOLHA_ATIVA.map((emp,idx)=>{
+                      const allDone=FOLHA_COLS.every(c=>getFechaCell("folha",emp,c).status==="entregue");
+                      return(
+                        <tr key={emp} style={{borderBottom:`1px solid ${BORDER}`,background:allDone?"#F1FBF4":idx%2===0?"#FAFBFF":"#fff"}}>
+                          <td style={{padding:"7px 10px",fontWeight:500,color:TEXT,position:"sticky",left:0,background:allDone?"#F1FBF4":idx%2===0?"#FAFBFF":"#fff",fontSize:11.5}}>{emp}</td>
+                          {FOLHA_COLS.map(col=>{
+                            const cell=getFechaCell("folha",emp,col);
+                            const isEntregue=cell.status==="entregue";
+                            return(
+                              <td key={col} style={{padding:"5px 6px",textAlign:"center",verticalAlign:"middle"}}>
+                                <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+                                  <span className="cell-btn" onClick={()=>cycleFolhaStatus(emp,col)} style={{fontSize:16,cursor:"pointer",transition:"transform .15s"}}>{STATUS_ICON[cell.status]}</span>
+                                  {isEntregue&&(
+                                    <select value={cell.via||""} onChange={e=>setFolhaVia(emp,col,e.target.value)} style={{fontSize:8.5,border:`1px solid ${BORDER}`,borderRadius:3,padding:"1px 2px",background:GRAY,color:TEXT2,cursor:"pointer"}}>
+                                      <option value="">via?</option>
+                                      <option value="E-mail">E-mail</option>
+                                      <option value="WhatsApp">WhatsApp</option>
+                                    </select>
+                                  )}
+                                  {isEntregue&&cell.data_entrega&&<span style={{fontSize:8,color:TEXT2}}>{cell.data_entrega}</span>}
+                                </div>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <div style={{padding:"8px 12px",fontSize:10,color:TEXT2,borderTop:`1px solid ${BORDER}`,display:"flex",justifyContent:"space-between"}}>
+                  <span>⬜ Pendente → 🟡 Em andamento → ✅ Entregue · Clique no ícone para avançar</span>
+                  <span style={{color:"#2E7D32",fontWeight:600}}>✅ {FOLHA_ATIVA.filter(e=>FOLHA_COLS.every(c=>getFechaCell("folha",e,c).status==="entregue")).length}/{FOLHA_ATIVA.length} completas</span>
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* DOMÉSTICAS */}
-          {fechaView==="dom"&&(
-            <div style={{background:"#fff",border:`1px solid ${BORDER}`,borderRadius:10,overflow:"auto"}}>
-              <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                <thead>
-                  <tr style={{background:"#F3E5F5",borderBottom:`2px solid #6A1B9A`}}>
-                    <th style={{padding:"8px 10px",textAlign:"left",color:"#6A1B9A",fontWeight:700,fontSize:11}}>Empregada</th>
-                    {DOM_COLS.map(c=><th key={c} style={{padding:"8px 12px",textAlign:"center",color:"#6A1B9A",fontWeight:700,fontSize:11}}>{c}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {DOMESTICAS.map((emp,idx)=>{
-                    const row=fechamento.dom[emp]||{};
-                    return(
+            {/* DOMÉSTICAS */}
+            {fechaView==="dom"&&(
+              <div style={{background:"#fff",border:`1px solid ${BORDER}`,borderRadius:10,overflow:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                  <thead>
+                    <tr style={{background:"#F3E5F5",borderBottom:`2px solid #6A1B9A`}}>
+                      <th style={{padding:"8px 10px",textAlign:"left",color:"#6A1B9A",fontWeight:700,fontSize:11}}>Empregada Doméstica</th>
+                      {DOM_COLS.map(c=><th key={c} style={{padding:"8px 18px",textAlign:"center",color:"#6A1B9A",fontWeight:700,fontSize:11}}>{c}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {DOMESTICAS.map((emp,idx)=>(
                       <tr key={emp} style={{borderBottom:`1px solid ${BORDER}`,background:idx%2===0?"#FAFBFF":"#fff"}}>
-                        <td style={{padding:"8px 10px",fontWeight:500,color:TEXT}}>{emp}</td>
+                        <td style={{padding:"9px 10px",fontWeight:500,color:TEXT}}>{emp}</td>
                         {DOM_COLS.map(col=>{
-                          const cell=row[col]||{status:"pendente"};
-                          return(
-                            <td key={col} style={{padding:"6px",textAlign:"center"}}>
-                              <span className="cell-btn" onClick={()=>cycleDomStatus(emp,col)} style={{fontSize:16,cursor:"pointer"}}>{STATUS_ICON[cell.status]}</span>
-                            </td>
-                          );
+                          const cell=getFechaCell("dom",emp,col);
+                          return(<td key={col} style={{padding:"6px",textAlign:"center"}}>
+                            <span className="cell-btn" onClick={()=>cycleDomStatus(emp,col)} style={{fontSize:18,cursor:"pointer",transition:"transform .15s"}}>{STATUS_ICON[cell.status]}</span>
+                          </td>);
                         })}
                       </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* SEM MOVIMENTO */}
+            {fechaView==="sem"&&(
+              <div style={{background:"#fff",border:`1px solid ${BORDER}`,borderRadius:10,padding:14}}>
+                <div style={{fontSize:11.5,color:TEXT2,marginBottom:12}}>Empresas sem movimento — entregue mensalmente via automação. Marque como conferido:</div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:7}}>
+                  {SEM_MOVIMENTO.map(emp=>{
+                    const conf=getFechaCell("sem",emp,"conferido").status==="entregue";
+                    return(
+                      <div key={emp} onClick={()=>toggleSem(emp)} style={{border:`1.5px solid ${conf?"#2E7D32":BORDER}`,borderRadius:8,padding:"8px 12px",cursor:"pointer",background:conf?"#F1FBF4":"#fff",display:"flex",alignItems:"center",gap:8,transition:"all .15s"}}>
+                        <span style={{fontSize:16}}>{conf?"✅":"⬜"}</span>
+                        <span style={{fontSize:12,color:TEXT,fontWeight:conf?600:400}}>{emp}</span>
+                      </div>
                     );
                   })}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {/* SEM MOVIMENTO */}
-          {fechaView==="sem"&&(
-            <div style={{background:"#fff",border:`1px solid ${BORDER}`,borderRadius:10,padding:14}}>
-              <div style={{fontSize:11.5,color:TEXT2,marginBottom:12}}>Empresas sem movimento — entregue mensalmente via automação. Marque como conferido:</div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:7}}>
-                {SEM_MOVIMENTO.map(emp=>{
-                  const conf=fechamento.sem[emp]?.conferido||false;
-                  return(
-                    <div key={emp} onClick={()=>toggleSem(emp)} style={{border:`1.5px solid ${conf?"#2E7D32":BORDER}`,borderRadius:8,padding:"8px 12px",cursor:"pointer",background:conf?"#F1FBF4":"#fff",display:"flex",alignItems:"center",gap:8}}>
-                      <span style={{fontSize:16}}>{conf?"✅":"⬜"}</span>
-                      <span style={{fontSize:12,color:TEXT,fontWeight:conf?600:400}}>{emp}</span>
-                    </div>
-                  );
-                })}
+                </div>
+                <div style={{marginTop:12,fontSize:11,color:TEXT2,fontWeight:600}}>
+                  ✅ {SEM_MOVIMENTO.filter(e=>getFechaCell("sem",e,"conferido").status==="entregue").length} de {SEM_MOVIMENTO.length} conferidas
+                </div>
               </div>
-              <div style={{marginTop:12,fontSize:11,color:TEXT2}}>
-                ✅ {SEM_MOVIMENTO.filter(e=>fechamento.sem[e]?.conferido).length} de {SEM_MOVIMENTO.length} conferidas
-              </div>
-            </div>
-          )}
+            )}
+          </>}
         </>}
       </div>
 
@@ -762,16 +729,8 @@ export default function App(){
             <div style={{display:"flex",flexDirection:"column",gap:11}}>
               <div><label style={S.label}>Título *</label><input style={S.input} value={form.title} onChange={e=>setForm(f=>({...f,title:e.target.value}))} placeholder="Ex: Folha de pagamento maio..."/></div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                <div><label style={S.label}>Categoria</label>
-                  <select style={S.input} value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}>
-                    {Object.entries(CATEGORIES).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}
-                  </select>
-                </div>
-                <div><label style={S.label}>Prioridade</label>
-                  <select style={S.input} value={form.priority} onChange={e=>setForm(f=>({...f,priority:e.target.value}))}>
-                    {Object.entries(PRIORITIES).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
-                  </select>
-                </div>
+                <div><label style={S.label}>Categoria</label><select style={S.input} value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}>{Object.entries(CATEGORIES).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}</select></div>
+                <div><label style={S.label}>Prioridade</label><select style={S.input} value={form.priority} onChange={e=>setForm(f=>({...f,priority:e.target.value}))}>{Object.entries(PRIORITIES).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</select></div>
               </div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
                 <div><label style={S.label}>Prazo</label><input type="date" style={S.input} value={form.due} onChange={e=>setForm(f=>({...f,due:e.target.value}))}/></div>
@@ -781,9 +740,7 @@ export default function App(){
               <div><label style={S.label}>Observações</label><textarea style={{...S.input,resize:"none"}} rows={2} value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} placeholder="Detalhes adicionais..."/></div>
               <div style={{display:"flex",gap:8,marginTop:2}}>
                 <button onClick={()=>setShowForm(false)} style={{flex:1,background:"#fff",border:`1px solid ${BORDER}`,color:TEXT2,borderRadius:7,padding:"9px",fontSize:12,fontFamily:"inherit",cursor:"pointer"}}>Cancelar</button>
-                <button onClick={saveForm} disabled={saving} style={{flex:2,background:saving?"#90A4AE":BLUE,color:"#fff",border:"none",borderRadius:7,padding:"9px",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:saving?"not-allowed":"pointer"}}>
-                  {saving?"Salvando...":editId?"Salvar alterações":"Criar tarefa"}
-                </button>
+                <button onClick={saveForm} disabled={saving} style={{flex:2,background:saving?"#90A4AE":BLUE,color:"#fff",border:"none",borderRadius:7,padding:"9px",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:saving?"not-allowed":"pointer"}}>{saving?"Salvando...":editId?"Salvar alterações":"Criar tarefa"}</button>
               </div>
             </div>
           </div>
@@ -804,28 +761,21 @@ export default function App(){
                 </div>
               ))}
             </div>
-            {selectedTemplate&&(
-              <>
-                <div style={{background:GRAY,borderRadius:7,padding:"9px 11px",marginBottom:11}}>
-                  <div style={{fontSize:10.5,fontWeight:600,color:TEXT2,marginBottom:5}}>ETAPAS:</div>
-                  {PROCESS_TEMPLATES[selectedTemplate].steps.map((s,i)=>(
-                    <div key={i} style={{fontSize:10.5,color:TEXT,marginBottom:3,display:"flex",alignItems:"center",gap:5}}>
-                      <span style={{color:PRIORITIES[s.priority].color,fontWeight:700,fontSize:9}}>●</span>
-                      {s.title} <span style={{color:TEXT2,fontSize:9.5}}>– {s.daysFromNow===0?"hoje":s.daysFromNow===1?"amanhã":"+"+s.daysFromNow+"d"}</span>
-                    </div>
-                  ))}
-                </div>
-                <div style={{marginBottom:11}}>
-                  <label style={S.label}>Cliente *</label>
-                  <input style={S.input} value={templateClient} onChange={e=>setTemplateClient(e.target.value)} placeholder="Nome do cliente..."/>
-                </div>
-              </>
-            )}
+            {selectedTemplate&&<>
+              <div style={{background:GRAY,borderRadius:7,padding:"9px 11px",marginBottom:11}}>
+                <div style={{fontSize:10.5,fontWeight:600,color:TEXT2,marginBottom:5}}>ETAPAS:</div>
+                {PROCESS_TEMPLATES[selectedTemplate].steps.map((s,i)=>(
+                  <div key={i} style={{fontSize:10.5,color:TEXT,marginBottom:3,display:"flex",alignItems:"center",gap:5}}>
+                    <span style={{color:PRIORITIES[s.priority].color,fontWeight:700,fontSize:9}}>●</span>
+                    {s.title} <span style={{color:TEXT2,fontSize:9.5}}>– {s.daysFromNow===0?"hoje":s.daysFromNow===1?"amanhã":"+"+s.daysFromNow+"d"}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{marginBottom:11}}><label style={S.label}>Cliente *</label><input style={S.input} value={templateClient} onChange={e=>setTemplateClient(e.target.value)} placeholder="Nome do cliente..."/></div>
+            </>}
             <div style={{display:"flex",gap:8}}>
               <button onClick={()=>{setShowTemplates(false);setSelectedTemplate(null);setTemplateClient("");}} style={{flex:1,background:"#fff",border:`1px solid ${BORDER}`,color:TEXT2,borderRadius:7,padding:"9px",fontSize:12,fontFamily:"inherit",cursor:"pointer"}}>Cancelar</button>
-              <button onClick={createProcess} disabled={!selectedTemplate||!templateClient.trim()||saving} style={{flex:2,background:(!selectedTemplate||!templateClient.trim()||saving)?"#90A4AE":"#6A1B9A",color:"#fff",border:"none",borderRadius:7,padding:"9px",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:(!selectedTemplate||!templateClient.trim())?"not-allowed":"pointer"}}>
-                {saving?"Criando...":"Criar todas as etapas"}
-              </button>
+              <button onClick={createProcess} disabled={!selectedTemplate||!templateClient.trim()||saving} style={{flex:2,background:(!selectedTemplate||!templateClient.trim()||saving)?"#90A4AE":"#6A1B9A",color:"#fff",border:"none",borderRadius:7,padding:"9px",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:(!selectedTemplate||!templateClient.trim())?"not-allowed":"pointer"}}>{saving?"Criando...":"Criar todas as etapas"}</button>
             </div>
           </div>
         </div>
@@ -836,10 +786,7 @@ export default function App(){
         <div style={S.overlay} onClick={e=>e.target===e.currentTarget&&(setShowRecurring(false),setRecurringClient(""),setSelectedRecurring([]))}>
           <div style={S.modal}>
             <div style={{fontWeight:700,fontSize:16,color:"#00838F",marginBottom:14,borderBottom:"2px solid #E0F7FA",paddingBottom:10}}>🔄 Tarefas Recorrentes do Mês</div>
-            <div style={{marginBottom:11}}>
-              <label style={S.label}>Cliente *</label>
-              <input style={S.input} value={recurringClient} onChange={e=>setRecurringClient(e.target.value)} placeholder="Nome do cliente..."/>
-            </div>
+            <div style={{marginBottom:11}}><label style={S.label}>Cliente *</label><input style={S.input} value={recurringClient} onChange={e=>setRecurringClient(e.target.value)} placeholder="Nome do cliente..."/></div>
             <div style={{marginBottom:4}}>
               <label style={S.label}>Selecione as tarefas</label>
               <div style={{display:"flex",justifyContent:"flex-end",marginBottom:5}}>
@@ -849,26 +796,15 @@ export default function App(){
               </div>
             </div>
             <div style={{display:"flex",flexDirection:"column",gap:5,marginBottom:13,maxHeight:240,overflowY:"auto"}}>
-              {RECURRING_TEMPLATES.map((r,i)=>{
-                const sel=selectedRecurring.includes(i);
-                return(
-                  <div key={i} onClick={()=>setSelectedRecurring(prev=>sel?prev.filter(x=>x!==i):[...prev,i])} style={{border:`1.5px solid ${sel?BLUE:BORDER}`,borderRadius:7,padding:"7px 10px",cursor:"pointer",background:sel?BLUE_LIGHT:"#fff",display:"flex",alignItems:"center",gap:8}}>
-                    <div style={{width:15,height:15,borderRadius:3,border:`2px solid ${sel?BLUE:BORDER}`,background:sel?BLUE:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                      {sel&&<span style={{color:"#fff",fontSize:9,fontWeight:700}}>✓</span>}
-                    </div>
-                    <div style={{flex:1}}>
-                      <div style={{fontSize:11.5,fontWeight:600,color:TEXT}}>{CATEGORIES[r.category]?.icon} {r.title}</div>
-                      <div style={{fontSize:9.5,color:TEXT2}}>Todo dia {r.dayOfMonth} · {PRIORITIES[r.priority].label}</div>
-                    </div>
-                  </div>
-                );
-              })}
+              {RECURRING_TEMPLATES.map((r,i)=>{const sel=selectedRecurring.includes(i);
+                return(<div key={i} onClick={()=>setSelectedRecurring(prev=>sel?prev.filter(x=>x!==i):[...prev,i])} style={{border:`1.5px solid ${sel?BLUE:BORDER}`,borderRadius:7,padding:"7px 10px",cursor:"pointer",background:sel?BLUE_LIGHT:"#fff",display:"flex",alignItems:"center",gap:8}}>
+                  <div style={{width:15,height:15,borderRadius:3,border:`2px solid ${sel?BLUE:BORDER}`,background:sel?BLUE:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{sel&&<span style={{color:"#fff",fontSize:9,fontWeight:700}}>✓</span>}</div>
+                  <div style={{flex:1}}><div style={{fontSize:11.5,fontWeight:600,color:TEXT}}>{CATEGORIES[r.category]?.icon} {r.title}</div><div style={{fontSize:9.5,color:TEXT2}}>Todo dia {r.dayOfMonth} · {PRIORITIES[r.priority].label}</div></div>
+                </div>);})}
             </div>
             <div style={{display:"flex",gap:8}}>
               <button onClick={()=>{setShowRecurring(false);setRecurringClient("");setSelectedRecurring([]);}} style={{flex:1,background:"#fff",border:`1px solid ${BORDER}`,color:TEXT2,borderRadius:7,padding:"9px",fontSize:12,fontFamily:"inherit",cursor:"pointer"}}>Cancelar</button>
-              <button onClick={createRecurring} disabled={!recurringClient.trim()||selectedRecurring.length===0||saving} style={{flex:2,background:(!recurringClient.trim()||selectedRecurring.length===0||saving)?"#90A4AE":"#00838F",color:"#fff",border:"none",borderRadius:7,padding:"9px",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:(!recurringClient.trim()||selectedRecurring.length===0)?"not-allowed":"pointer"}}>
-                {saving?`Criando...`:`Criar ${selectedRecurring.length} tarefa${selectedRecurring.length!==1?"s":""}`}
-              </button>
+              <button onClick={createRecurring} disabled={!recurringClient.trim()||selectedRecurring.length===0||saving} style={{flex:2,background:(!recurringClient.trim()||selectedRecurring.length===0||saving)?"#90A4AE":"#00838F",color:"#fff",border:"none",borderRadius:7,padding:"9px",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:(!recurringClient.trim()||selectedRecurring.length===0)?"not-allowed":"pointer"}}>{saving?"Criando...":"Criar "+selectedRecurring.length+" tarefa"+(selectedRecurring.length!==1?"s":"")}</button>
             </div>
           </div>
         </div>
