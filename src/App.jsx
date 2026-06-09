@@ -108,9 +108,16 @@ function montarAgendaDia(tasks){
   }
 
   // TODAS as tarefas pendentes — sem filtro de data
-  // Ordenação inteligente por prioridade de negócio
+  // Deduplicar por título+dia (evitar múltiplas postagens no mesmo dia)
+  const vistosHoje=new Set();
   const candidatas=[...tasks]
-    .filter(t=>!t.done)
+    .filter(t=>{
+      if(t.done)return false;
+      const chave=`${t.title}|${t.due}`;
+      if(vistosHoje.has(chave))return false;
+      vistosHoje.add(chave);
+      return true;
+    })
     .sort((a,b)=>{
       // Atrasadas sempre primeiro
       const aAtras=a.due<todayS; const bAtras=b.due<todayS;
@@ -160,10 +167,12 @@ function montarAgendaDia(tasks){
     // Usar tempo_estimado do tipo_atividade se disponível
     const tipoInfo=TIPOS_ATIVIDADE[t.tipo_atividade];
     const duracao=t.tempo_estimado||tipoInfo?.tempo||TEMPO_POR_CATEGORIA[t.category]||60;
-    // Pular apenas se explicitamente marcado para não agendar
+    // Só pular se EXPLICITAMENTE marcado false — null/undefined = pode agendar
     if(t.permite_agendamento===false)continue;
-    // Pular tarefas aguardando informações (somente se campo preenchido)
+    // Só pular se status operacional estiver explicitamente bloqueado
     if(t.status_operacional==="aguardando_info"||t.status_operacional==="aguardando_cliente")continue;
+    // Não mostrar tarefas já concluídas
+    if(t.done)continue;
     // Avançar sobre blocos fixos
     let tentativas=0;
     while(tentativas<15){
@@ -347,9 +356,16 @@ function getRecorrentesDoMes(){
     tarefas.push({title:"⚙️ Parametrização e Automação",category:"administrativo",priority:"media",due:d(dia),client:"Interno",notes:"Parametrizar sistema, criar automações, melhorar processos",tipo_atividade:"parametrizacao",tempo_estimado:60,status_operacional:"pronto",permite_agendamento:true,recorrente_key:`param${dia}-${mesKey}`});
   });
 
-  // Marketing — Seg/Qua/Sex (apenas primeiras 4 semanas)
-  diasMarketing().slice(0,12).forEach((dt,i)=>{
-    tarefas.push({title:"📣 Postagem Instagram",category:"administrativo",priority:"baixa",due:dt,client:"Interno",notes:"Publicação de conteúdo — 10 minutos",tipo_atividade:"marketing",tempo_estimado:10,status_operacional:"pronto",permite_agendamento:true,recorrente_key:`mkt${i}-${mesKey}`});
+  // Marketing — 1 postagem por Seg/Qua/Sex (sem duplicar)
+  diasMarketing().forEach((dt,i)=>{
+    tarefas.push({
+      title:"📣 Postagem Instagram",category:"administrativo",priority:"baixa",
+      due:dt,client:"Interno",notes:"Publicação de conteúdo — 10 minutos",
+      tipo_atividade:"marketing",tempo_estimado:10,
+      status_operacional:"pronto",permite_agendamento:true,
+      hora_agendada:"10:20",
+      recorrente_key:`mkt-${dt}` // chave única por DIA, não por índice
+    });
   });
 
   return tarefas;
@@ -482,15 +498,30 @@ export default function App(){
 
   async function criarRecorrentesDoMes(){
     const recorrentes=getRecorrentesDoMes();
-    // Buscar keys já existentes para não duplicar
-    const{data:exist}=await supabase.from("tasks").select("recorrente_key").not("recorrente_key","is",null);
-    const keysExist=new Set((exist||[]).map(r=>r.recorrente_key));
-    const novas=recorrentes.filter(t=>t.recorrente_key&&!keysExist.has(t.recorrente_key));
-    if(novas.length===0)return;
     const hoje=new Date().toISOString().split("T")[0];
+
+    // Buscar TODAS as tarefas do mês atual para verificar duplicatas
+    const mesAtual=hoje.substring(0,7); // "2026-06"
+    const{data:exist}=await supabase.from("tasks")
+      .select("recorrente_key,title,due")
+      .gte("due",mesAtual+"-01")
+      .lte("due",mesAtual+"-31");
+
+    const keysExist=new Set((exist||[]).map(r=>r.recorrente_key).filter(Boolean));
+    // Também verificar por título+dia para evitar duplicatas sem recorrente_key
+    const titleDueExist=new Set((exist||[]).map(r=>`${r.title}|${r.due}`));
+
+    const novas=recorrentes.filter(t=>{
+      if(!t.recorrente_key)return false;
+      if(keysExist.has(t.recorrente_key))return false;
+      // Verificar também por título+dia
+      if(titleDueExist.has(`${t.title}|${t.due}`))return false;
+      return true;
+    });
+
+    if(novas.length===0)return;
     const payload=novas.map(t=>({...t,done:false,created_at:hoje,completed_at:null}));
     await supabase.from("tasks").insert(payload);
-    // Recarregar tarefas silenciosamente
     const{data}=await supabase.from("tasks").select("*").order("due",{ascending:true});
     setTasks(data||[]);
   }
