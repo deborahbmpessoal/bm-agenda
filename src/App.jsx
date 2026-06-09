@@ -81,8 +81,6 @@ const STATUS_ICON={"pendente":"⬜","andamento":"🟡","entregue":"✅"};
 // MENU INFERIOR — ícones e labels
 const NAV_ITEMS=[
   {id:"agenda",icon:"📅",label:"Hoje"},
-  {id:"semana",icon:"🗓",label:"Semana"},
-  {id:"mes",icon:"📆",label:"Mês"},
   {id:"clientes",icon:"👥",label:"Clientes"},
   {id:"tarefas",icon:"📋",label:"Tarefas"},
   {id:"planejamento",icon:"🗂",label:"Planejar"},
@@ -540,7 +538,7 @@ export default function App(){
 
 
         {/* ── PLANEJAMENTO ── */}
-        {view==="planejamento"&&<PlanejamentoView supabase={supabase}/>}
+        {view==="planejamento"&&<CentralPlanejamento supabase={supabase} tasks={tasks} pending={pending}/>}
 
         {/* ── DASHBOARD ── */}
         {view==="dashboard"&&<DashboardView fechaMap={fechaMap} fechaLoading={fechaLoading} onRefresh={fetchFechamento} getCell={getCell}/>}
@@ -797,6 +795,726 @@ function Card({t,i,S,onToggle,onEdit,onDelete,compact,showDates}){
     </div>
   );
 }
+
+// ═══════════════════════════════════════════════════════════
+// CENTRAL DE PLANEJAMENTO INTELIGENTE
+// ═══════════════════════════════════════════════════════════
+
+const FERIAS_INICIO = "2026-07-13";
+const FERIAS_FIM    = "2026-07-24";
+const NOME_USUARIO  = "Deborah";
+
+const CP_CATS = {
+  admissao:      { label:"Admissão",            color:"#7B1FA2", bg:"#F3E5F5", icon:"👤", tempo:30,  prioBase:"urgente" },
+  rescisao:      { label:"Rescisão",             color:"#C62828", bg:"#FFEBEE", icon:"📄", tempo:60,  prioBase:"urgente" },
+  folha:         { label:"Folha de Pagamento",   color:"#1565C0", bg:"#E3F0FF", icon:"💼", tempo:120, prioBase:"alta"    },
+  guias:         { label:"Guias/DARF/FGTS",      color:"#E65100", bg:"#FFF3E0", icon:"📋", tempo:60,  prioBase:"alta"    },
+  reinf:         { label:"REINF/PER-DCOMP",      color:"#00838F", bg:"#E0F7FA", icon:"📊", tempo:60,  prioBase:"alta"    },
+  atendimento:   { label:"Atendimento Cliente",  color:"#2E7D32", bg:"#E8F5E9", icon:"🤝", tempo:30,  prioBase:"alta"    },
+  reuniao:       { label:"Reunião",              color:"#1565C0", bg:"#E3F0FF", icon:"👥", tempo:60,  prioBase:"media"   },
+  marketing:     { label:"Marketing",            color:"#AD1457", bg:"#FCE4EC", icon:"📣", tempo:10,  prioBase:"baixa"   },
+  convencao:     { label:"Convenção Coletiva",   color:"#6A1B9A", bg:"#F3E5F5", icon:"⚖️", tempo:30,  prioBase:"media"   },
+  parametrizacao:{ label:"Parametrização",       color:"#37474F", bg:"#ECEFF1", icon:"⚙️", tempo:60,  prioBase:"media"   },
+  estudo:        { label:"Estudos",              color:"#558B2F", bg:"#F1F8E9", icon:"📚", tempo:90,  prioBase:"baixa"   },
+  gestao:        { label:"Gestão Interna",       color:"#455A64", bg:"#ECEFF1", icon:"🏢", tempo:30,  prioBase:"media"   },
+  checkin:       { label:"Check-in Diário",      color:"#1565C0", bg:"#E3F0FF", icon:"✅", tempo:15,  prioBase:"urgente" },
+  checkout:      { label:"Check-out Diário",     color:"#1565C0", bg:"#E3F0FF", icon:"🔍", tempo:15,  prioBase:"urgente" },
+};
+
+const CP_PRIOS = {
+  urgente: { label:"Urgente",  color:"#C62828", bg:"#FFEBEE", ordem:1 },
+  alta:    { label:"Alta",     color:"#E65100", bg:"#FFF3E0", ordem:2 },
+  media:   { label:"Média",    color:"#F9A825", bg:"#FFFDE7", ordem:3 },
+  baixa:   { label:"Baixa",    color:"#2E7D32", bg:"#E8F5E9", ordem:4 },
+};
+
+const HORARIOS_ATENDIMENTO = [
+  { inicio:"09:00", fim:"09:30" },
+  { inicio:"11:30", fim:"12:00" },
+  { inicio:"14:00", fim:"14:30" },
+  { inicio:"16:00", fim:"16:30" },
+];
+
+const BLOCOS_FIXOS_BASE = [
+  { titulo:"✅ Check-in Diário",  categoria:"checkin",  hora_inicio:"08:00", hora_fim:"08:15", prioridade:"urgente", observacoes:"Revisão de prioridades · Urgências · Organização do dia", ritual:true },
+  { titulo:"🔍 Check-out Diário", categoria:"checkout", hora_inicio:"16:45", hora_fim:"17:00", prioridade:"urgente", observacoes:"Conferência de entregas · Pendências · Planejamento amanhã",  ritual:true },
+  { titulo:"👥 Atendimento Clientes", categoria:"atendimento", hora_inicio:"09:00", hora_fim:"09:30", prioridade:"media", observacoes:"Reservado para atendimento", ritual:true },
+  { titulo:"👥 Atendimento Clientes", categoria:"atendimento", hora_inicio:"11:30", hora_fim:"12:00", prioridade:"media", observacoes:"Reservado para atendimento", ritual:true },
+  { titulo:"👥 Atendimento Clientes", categoria:"atendimento", hora_inicio:"14:00", hora_fim:"14:30", prioridade:"media", observacoes:"Reservado para atendimento", ritual:true },
+  { titulo:"👥 Atendimento Clientes", categoria:"atendimento", hora_inicio:"16:00", hora_fim:"16:30", prioridade:"media", observacoes:"Reservado para atendimento", ritual:true },
+];
+
+function cpToMin(t){ const[h,m]=t.split(":").map(Number); return h*60+m; }
+function cpAddMin(t,m){ const tot=cpToMin(t)+m; return `${String(Math.floor(tot/60)).padStart(2,"0")}:${String(tot%60).padStart(2,"0")}`; }
+function cpFmtDate(d){ return d.toISOString().split("T")[0]; }
+function cpPtDate(s){ if(!s)return"—"; const[y,m,d]=s.split("-"); return`${d}/${m}/${y}`; }
+function cpGetWeekDates(offset=0){
+  const now=new Date(); const day=now.getDay();
+  const diff=now.getDate()-day+(day===0?-6:1)+offset*7;
+  return Array.from({length:5},(_,i)=>{ const d=new Date(now); d.setDate(diff+i); return d; });
+}
+function cpIsFerias(dateStr){ return dateStr>=FERIAS_INICIO&&dateStr<=FERIAS_FIM; }
+function cpNextWeekday(dateStr){
+  const d=new Date(dateStr+"T12:00:00");
+  do{ d.setDate(d.getDate()-1); }while(d.getDay()===0||d.getDay()===6);
+  return cpFmtDate(d);
+}
+
+const CP_DIAS=["Segunda","Terça","Quarta","Quinta","Sexta"];
+const CP_MESES=["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+
+function CentralPlanejamento({ supabase, tasks, pending }){
+  const [blocos,setBlocos]   = useState([]);
+  const [log,setLog]         = useState([]);
+  const [reunioes,setReunioes] = useState([]);
+  const [loading,setLoading] = useState(true);
+  const [subView,setSubView] = useState("painel"); // painel | dia | semana | mes | historico | log | reunioes
+  const [weekOffset,setWeekOffset] = useState(0);
+  const [diaOffset,setDiaOffset]   = useState(0);
+  const [mesOffset,setMesOffset]   = useState(0);
+  const [showFormCp,setShowFormCp] = useState(false);
+  const [showFormReuniao,setShowFormReuniao] = useState(false);
+  const [editBlocoId,setEditBlocoId] = useState(null);
+  const [toastCp,setToastCp] = useState(null);
+  const [painelIA,setPainelIA] = useState(null);
+  const [loadingIA,setLoadingIA] = useState(false);
+  const [dragId,setDragId]   = useState(null);
+  const [buscaHist,setBuscaHist] = useState("");
+  const [filtroHistCliente,setFiltroHistCliente] = useState("");
+
+  const today = new Date(); today.setHours(0,0,0,0);
+  const todayStr = cpFmtDate(today);
+  const diaAtual = new Date(today); diaAtual.setDate(today.getDate()+diaOffset);
+  const diaStr   = cpFmtDate(diaAtual);
+
+  const weekDates = cpGetWeekDates(weekOffset);
+  const mesRef    = useMemo(()=>{ const d=new Date(today); d.setDate(1); d.setMonth(d.getMonth()+mesOffset); return d; },[mesOffset]);
+
+  const emptyBloco = { titulo:"", categoria:"folha", prioridade:"alta", data:todayStr, hora_inicio:"08:15", hora_fim:"09:15", tempo_previsto:60, tempo_realizado:0, observacoes:"", cliente:"", concluido:false, ritual:false, recorrencia:"nenhuma" };
+  const [formCp,setFormCp] = useState(emptyBloco);
+  const emptyReuniao = { cliente:"", assunto:"", data:todayStr, hora:"09:00", duracao:60, observacoes:"", status:"agendada" };
+  const [formReuniao,setFormReuniao] = useState(emptyReuniao);
+
+  useEffect(()=>{ fetchAll(); },[weekOffset]);
+
+  async function fetchAll(){
+    setLoading(true);
+    const start=cpFmtDate(weekDates[0]); const end=cpFmtDate(weekDates[4]);
+    const [b,l,r] = await Promise.all([
+      supabase.from("planejamento").select("*").gte("data",start).lte("data",end).order("hora_inicio"),
+      supabase.from("planejamento_log").select("*").order("created_at",{ascending:false}).limit(50),
+      supabase.from("reunioes_clientes").select("*").order("data",{ascending:false}).limit(30),
+    ]);
+    setBlocos(b.data||[]); setLog(l.data||[]); setReunioes(r.data||[]);
+    setLoading(false);
+  }
+
+  async function fetchHistorico(){
+    const{data}=await supabase.from("planejamento").select("*").eq("concluido",true).order("created_at",{ascending:false});
+    return data||[];
+  }
+
+  function showToastCp(msg,type="ok"){ setToastCp({msg,type}); setTimeout(()=>setToastCp(null),4000); }
+
+  async function registrarLog(tipo,descricao,dados={}){
+    await supabase.from("planejamento_log").insert([{tipo,descricao,dados}]);
+  }
+
+  // ── CRIAR RITUAIS AUTOMÁTICOS ──
+  async function criarRituaisSemana(){
+    const start=cpFmtDate(weekDates[0]); const end=cpFmtDate(weekDates[4]);
+    const{data:exist}=await supabase.from("planejamento").select("id").eq("ritual",true).gte("data",start).lte("data",end);
+    if(exist&&exist.length>0) return;
+    const inserts=[];
+    weekDates.forEach(d=>{
+      const ds=cpFmtDate(d);
+      if(cpIsFerias(ds)) return;
+      BLOCOS_FIXOS_BASE.forEach(b=>{ inserts.push({...b,data:ds,tempo_previsto:cpToMin(b.hora_fim)-cpToMin(b.hora_inicio),tempo_realizado:0,cliente:""}); });
+    });
+    if(inserts.length>0){ await supabase.from("planejamento").insert(inserts); await fetchAll(); showToastCp("✅ Rituais da semana criados!"); await registrarLog("ritual","Rituais automáticos criados para a semana"); }
+  }
+
+  useEffect(()=>{ if(!loading) criarRituaisSemana(); },[loading]);
+
+  // ── CRIAR RECORRENTES AUTOMÁTICOS ──
+  async function criarRecorrentesSemanais(){
+    const start=cpFmtDate(weekDates[0]);
+    const{data:exist}=await supabase.from("planejamento").select("id").eq("recorrencia","semanal_auto").gte("data",start).lte("data",cpFmtDate(weekDates[4]));
+    if(exist&&exist.length>0) return;
+    const inserts=[];
+    weekDates.forEach((d,i)=>{
+      const ds=cpFmtDate(d); if(cpIsFerias(ds)) return;
+      // Marketing: Seg(0), Qua(2), Sex(4) às 10:00
+      if([0,2,4].includes(i)) inserts.push({titulo:"📣 Publicação de Conteúdo",categoria:"marketing",prioridade:"baixa",data:ds,hora_inicio:"10:00",hora_fim:"10:10",tempo_previsto:10,tempo_realizado:0,observacoes:"Publicação de conteúdo nas redes",cliente:"",concluido:false,ritual:false,recorrencia:"semanal_auto"});
+    });
+    if(inserts.length>0){ await supabase.from("planejamento").insert(inserts); showToastCp("📣 Marketing da semana criado!"); }
+  }
+
+  // ── REORGANIZAÇÃO AUTOMÁTICA ──
+  async function reorganizarAgenda(novaUrgencia){
+    const ds=novaUrgencia.data;
+    const{data:blocosDia}=await supabase.from("planejamento").select("*").eq("data",ds).eq("concluido",false).order("hora_inicio");
+    if(!blocosDia||blocosDia.length===0) return;
+    const urgentes=blocosDia.filter(b=>b.prioridade==="urgente"||b.categoria==="admissao"||b.categoria==="rescisao");
+    const outros=blocosDia.filter(b=>b.prioridade!=="urgente"&&b.categoria!=="admissao"&&b.categoria!=="rescisao"&&!b.ritual);
+    const justificativas=[];
+    let horaAtual=cpAddMin(novaUrgencia.hora_fim,5);
+    for(const b of outros){
+      if(cpToMin(horaAtual)+b.tempo_previsto>cpToMin("12:00")&&cpToMin(horaAtual)<cpToMin("14:00")) horaAtual="14:00";
+      if(cpToMin(horaAtual)+b.tempo_previsto>cpToMin("17:00")) break;
+      const novaHoraFim=cpAddMin(horaAtual,b.tempo_previsto);
+      if(b.hora_inicio!==horaAtual){
+        await supabase.from("planejamento").update({hora_inicio:horaAtual,hora_fim:novaHoraFim}).eq("id",b.id);
+        justificativas.push(`"${b.titulo}" reagendado de ${b.hora_inicio} para ${horaAtual}`);
+      }
+      horaAtual=cpAddMin(novaHoraFim,5);
+    }
+    if(justificativas.length>0){
+      const desc=`Urgência "${novaUrgencia.titulo}" inserida. ${justificativas.join(". ")}`;
+      await registrarLog("reorganizacao",desc,{tarefa:novaUrgencia.titulo,afetadas:justificativas});
+      showToastCp(`⚡ Agenda reorganizada! ${justificativas.length} tarefa(s) realocada(s)`);
+      await fetchAll();
+    }
+  }
+
+  // ── SALVAR BLOCO ──
+  async function saveBloco(){
+    if(!formCp.titulo.trim()) return;
+    const cat=CP_CATS[formCp.categoria];
+    const payload={...formCp, tempo_previsto:cpToMin(formCp.hora_fim)-cpToMin(formCp.hora_inicio), cor:cat?.color||"#1565C0"};
+    if(cpIsFerias(payload.data)){ showToastCp("⚠️ Período de férias! Agenda bloqueada.","err"); return; }
+    if(editBlocoId){
+      await supabase.from("planejamento").update(payload).eq("id",editBlocoId);
+      showToastCp("Bloco atualizado!");
+    } else {
+      const{data}=await supabase.from("planejamento").insert([payload]).select();
+      showToastCp("Bloco criado!");
+      if(data&&data[0]&&(payload.prioridade==="urgente"||payload.categoria==="admissao"||payload.categoria==="rescisao")){
+        await reorganizarAgenda(data[0]);
+      }
+    }
+    setShowFormCp(false); setEditBlocoId(null); setFormCp(emptyBloco); fetchAll();
+  }
+
+  async function deleteBloco(id){ await supabase.from("planejamento").delete().eq("id",id); setBlocos(prev=>prev.filter(b=>b.id!==id)); }
+  async function toggleConcluido(b){
+    const v=!b.concluido;
+    await supabase.from("planejamento").update({concluido:v}).eq("id",b.id);
+    setBlocos(prev=>prev.map(x=>x.id===b.id?{...x,concluido:v}:x));
+    if(v) await registrarLog("conclusao",`"${b.titulo}" concluído`,{cliente:b.cliente,data:b.data});
+  }
+  async function duplicar(b){ const{id,...r}=b; await supabase.from("planejamento").insert([{...r,concluido:false,titulo:r.titulo+" (cópia)"}]); fetchAll(); showToastCp("Duplicado!"); }
+  async function moverDia(b,novaData){ await supabase.from("planejamento").update({data:novaData}).eq("id",b.id); await registrarLog("movimentacao",`"${b.titulo}" movido para ${cpPtDate(novaData)}`); fetchAll(); }
+
+  async function saveReuniao(){
+    if(!formReuniao.cliente.trim()) return;
+    await supabase.from("reunioes_clientes").insert([formReuniao]);
+    showToastCp("Reunião registrada!"); setShowFormReuniao(false); setFormReuniao(emptyReuniao);
+    const{data}=await supabase.from("reunioes_clientes").select("*").order("data",{ascending:false}).limit(30);
+    setReunioes(data||[]);
+  }
+
+  // ── PAINEL IA ──
+  async function gerarPainelIA(){
+    setLoadingIA(true);
+    const hoje=blocos.filter(b=>b.data===todayStr).sort((a,b)=>cpToMin(a.hora_inicio)-cpToMin(b.hora_inicio));
+    const atrasadas=pending?.filter(t=>t.due<todayStr)||[];
+    const urgentes=pending?.filter(t=>t.priority==="urgente"||t.priority==="alta")||[];
+    const prompt=`Você é um assistente de gestão do tempo para um escritório contábil chamado BM Contabilidade, da Deborah.
+
+Hoje é ${new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}.
+
+Blocos já agendados para hoje:
+${hoje.map(b=>`- ${b.hora_inicio}–${b.hora_fim}: ${b.titulo} (${b.categoria})`).join("\n")||"Nenhum bloco agendado"}
+
+Tarefas atrasadas (${atrasadas.length}):
+${atrasadas.slice(0,5).map(t=>`- ${t.title} (cliente: ${t.client||"—"}, prazo: ${t.due})`).join("\n")||"Nenhuma"}
+
+Tarefas urgentes/altas pendentes (${urgentes.length}):
+${urgentes.slice(0,5).map(t=>`- ${t.title} (cliente: ${t.client||"—"}, prazo: ${t.due})`).join("\n")||"Nenhuma"}
+
+Gere um resumo inteligente do dia no seguinte formato JSON:
+{
+  "saudacao": "Bom dia Deborah! [frase motivadora breve]",
+  "resumo": "[2 frases resumindo o dia]",
+  "sugestao_agenda": [
+    {"horario": "08:15–08:45", "tarefa": "...", "motivo": "..."},
+    {"horario": "08:45–10:15", "tarefa": "...", "motivo": "..."}
+  ],
+  "carga_prevista": 85,
+  "prioridade_maxima": "...",
+  "alertas": ["...", "..."]
+}
+
+Responda APENAS com o JSON, sem texto adicional.`;
+
+    try{
+      const res=await fetch("https://api.anthropic.com/v1/messages",{
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1000, messages:[{role:"user",content:prompt}] })
+      });
+      const data=await res.json();
+      const txt=data.content?.[0]?.text||"{}";
+      const clean=txt.replace(/```json|```/g,"").trim();
+      setPainelIA(JSON.parse(clean));
+    } catch(e){ showToastCp("Erro ao carregar IA","err"); }
+    setLoadingIA(false);
+  }
+
+  useEffect(()=>{ if(subView==="painel"&&!painelIA) gerarPainelIA(); },[subView]);
+
+  // Utilitários
+  function blocosDia(ds){ return blocos.filter(b=>b.data===ds).sort((a,b)=>cpToMin(a.hora_inicio)-cpToMin(b.hora_inicio)); }
+  const horasPlanejadasHoje = blocos.filter(b=>b.data===todayStr).reduce((s,b)=>s+(b.tempo_previsto||0),0);
+  const concluidosHoje = blocos.filter(b=>b.data===todayStr&&b.concluido).length;
+  const pendentesHoje  = blocos.filter(b=>b.data===todayStr&&!b.concluido).length;
+
+  const C="#1565C0",CL="#E3F0FF",BD="#DDE3F0",TX="#1A2340",TX2="#5A6580",GR="#F5F6FA",RD="#C62828",RL="#FFEBEE";
+  const inp={width:"100%",background:GR,border:`1px solid ${BD}`,borderRadius:8,padding:"9px 11px",color:TX,fontSize:13,fontFamily:"inherit"};
+  const lbl={fontSize:10,color:TX2,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:"0.5px",fontWeight:600};
+
+  function BlocoItem({b,showDate}){
+    const cat=CP_CATS[b.categoria]||CP_CATS.gestao;
+    const pri=CP_PRIOS[b.prioridade]||CP_PRIOS.media;
+    const cor=b.cor||cat.color;
+    return(
+      <div draggable onDragStart={()=>setDragId(b.id)} onDragEnd={()=>setDragId(null)}
+        style={{background:b.concluido?"#F9F9F9":cat.bg,border:`1.5px solid ${cor}`,borderLeft:`4px solid ${cor}`,borderRadius:8,padding:"9px 12px",marginBottom:6,opacity:b.concluido?0.6:1,cursor:"grab"}}>
+        <div style={{display:"flex",alignItems:"flex-start",gap:8}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:13,fontWeight:700,color:b.concluido?"#999":TX,textDecoration:b.concluido?"line-through":"none"}}>{b.titulo}</div>
+            <div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:3}}>
+              <span style={{fontSize:9.5,background:cat.bg,color:cat.color,border:`1px solid ${cat.color}44`,borderRadius:4,padding:"1px 6px",fontWeight:600}}>{cat.icon} {cat.label}</span>
+              <span style={{fontSize:9.5,background:pri.bg,color:pri.color,borderRadius:4,padding:"1px 6px",fontWeight:600}}>{pri.label}</span>
+              {b.cliente&&<span style={{fontSize:9.5,color:TX2}}>👤 {b.cliente}</span>}
+              {showDate&&<span style={{fontSize:9.5,color:TX2}}>📅 {cpPtDate(b.data)}</span>}
+            </div>
+            <div style={{fontSize:10.5,color:TX2,marginTop:3}}>{b.hora_inicio}–{b.hora_fim} · {b.tempo_previsto}min</div>
+            {b.observacoes&&<div style={{fontSize:10,color:TX2,marginTop:2,fontStyle:"italic"}}>{b.observacoes}</div>}
+          </div>
+          <div style={{display:"flex",gap:4,flexShrink:0}}>
+            <span onClick={()=>toggleConcluido(b)} style={{cursor:"pointer",fontSize:14,color:b.concluido?"#E65100":cat.color}} title={b.concluido?"Reabrir":"Concluir"}>{b.concluido?"↩":"✓"}</span>
+            <span onClick={()=>{setFormCp({titulo:b.titulo,categoria:b.categoria,prioridade:b.prioridade,data:b.data,hora_inicio:b.hora_inicio,hora_fim:b.hora_fim,tempo_previsto:b.tempo_previsto||60,tempo_realizado:b.tempo_realizado||0,observacoes:b.observacoes||"",cliente:b.cliente||"",concluido:b.concluido,ritual:b.ritual,recorrencia:"nenhuma"});setEditBlocoId(b.id);setShowFormCp(true);}} style={{cursor:"pointer",fontSize:11,color:"#90A4AE"}}>✏️</span>
+            <span onClick={()=>duplicar(b)} style={{cursor:"pointer",fontSize:11,color:"#90A4AE"}} title="Duplicar">⧉</span>
+            <span onClick={()=>deleteBloco(b.id)} style={{cursor:"pointer",fontSize:11,color:"#CFD8DC"}}>✕</span>
+          </div>
+        </div>
+        {/* Mover para outro dia */}
+        {!b.ritual&&<div style={{display:"flex",gap:4,marginTop:5,flexWrap:"wrap"}}>
+          {weekDates.map((d,i)=>{ const ds=cpFmtDate(d); if(ds===b.data) return null;
+            return<button key={i} onClick={()=>moverDia(b,ds)} style={{fontSize:9,background:"#fff",border:`1px solid ${BD}`,borderRadius:4,padding:"2px 6px",cursor:"pointer",color:TX2}}>→ {CP_DIAS[i].slice(0,3)}</button>; })}
+        </div>}
+      </div>
+    );
+  }
+
+  // ── GRADE SEMANAL ──
+  const SLOT=15; // px por 15min
+  const MANHA_PX=(4*60/15)*SLOT;
+  const TARDE_PX=(3*60/15)*SLOT;
+
+  function GradeDia({ds,idx}){
+    const db=blocosDia(ds);
+    return(
+      <div onDragOver={e=>e.preventDefault()} onDrop={async()=>{if(dragId){const b=blocos.find(x=>x.id===dragId);if(b)await moverDia(b,ds);setDragId(null);}}} style={{position:"relative",borderLeft:`1px solid ${BD}`,flex:1,minHeight:MANHA_PX+TARDE_PX+20}}>
+        {cpIsFerias(ds)&&<div style={{position:"absolute",inset:0,background:"rgba(255,235,238,.7)",zIndex:2,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,color:RD}}>🏖 Férias</div>}
+        {/* Manhã */}
+        {["08:00","08:15","08:30","08:45","09:00","09:15","09:30","09:45","10:00","10:15","10:30","10:45","11:00","11:15","11:30","11:45"].map((h,hi)=>(
+          <div key={h} style={{height:SLOT,borderTop:`1px solid ${h.endsWith("00")?"#DDE3F0":"#F0F3FA"}`}}/>
+        ))}
+        {/* Intervalo almoço */}
+        <div style={{height:10,background:"#F0F3FA",borderTop:`1px solid ${BD}`,borderBottom:`1px solid ${BD}`}}/>
+        {/* Tarde */}
+        {["14:00","14:15","14:30","14:45","15:00","15:15","15:30","15:45","16:00","16:15","16:30","16:45"].map(h=>(
+          <div key={h} style={{height:SLOT,borderTop:`1px solid ${h.endsWith("00")?"#DDE3F0":"#F0F3FA"}`}}/>
+        ))}
+        {/* Blocos */}
+        {db.map(b=>{
+          const cat=CP_CATS[b.categoria]||CP_CATS.gestao;
+          const cor=b.cor||cat.color;
+          const isManha=cpToMin(b.hora_inicio)<720;
+          const base=isManha?cpToMin(b.hora_inicio)-480:cpToMin(b.hora_inicio)-840+MANHA_PX+10;
+          const top=Math.floor(base/15)*SLOT;
+          const height=Math.max(Math.floor((cpToMin(b.hora_fim)-cpToMin(b.hora_inicio))/15)*SLOT,20);
+          return(
+            <div key={b.id} draggable onDragStart={()=>setDragId(b.id)} onDragEnd={()=>setDragId(null)} onClick={()=>{setFormCp({titulo:b.titulo,categoria:b.categoria,prioridade:b.prioridade,data:b.data,hora_inicio:b.hora_inicio,hora_fim:b.hora_fim,tempo_previsto:b.tempo_previsto||60,tempo_realizado:b.tempo_realizado||0,observacoes:b.observacoes||"",cliente:b.cliente||"",concluido:b.concluido,ritual:b.ritual,recorrencia:"nenhuma"});setEditBlocoId(b.id);setShowFormCp(true);}}
+              style={{position:"absolute",top,left:2,right:2,height,background:b.concluido?"#F5F5F5":cat.bg,border:`1.5px solid ${cor}`,borderLeft:`3px solid ${cor}`,borderRadius:5,padding:"2px 4px",overflow:"hidden",cursor:"pointer",zIndex:1,opacity:b.concluido?0.6:1}}>
+              <div style={{fontSize:9,fontWeight:700,color:cor,lineHeight:1.2,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{b.titulo}</div>
+              <div style={{fontSize:8,color:TX2}}>{b.hora_inicio}</div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  // ── GRADE MÊS ──
+  const mesAno=mesRef.getFullYear(); const mesNomeAtual=CP_MESES[mesRef.getMonth()];
+  const diasMes=new Date(mesAno,mesRef.getMonth()+1,0).getDate();
+  const primeiroDia=new Date(mesAno,mesRef.getMonth(),1).getDay();
+  const offsetMes=primeiroDia===0?6:primeiroDia-1;
+  function mesDateStr(d){ return`${mesAno}-${String(mesRef.getMonth()+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`; }
+
+  if(loading) return <div style={{textAlign:"center",padding:"40px",color:TX2,fontSize:13}}>Carregando Central de Planejamento...</div>;
+
+  return(
+    <div>
+      {toastCp&&<div style={{position:"fixed",bottom:80,right:16,zIndex:999,background:toastCp.type==="err"?RD:C,color:"#fff",borderRadius:10,padding:"10px 16px",fontSize:12.5,fontWeight:600,boxShadow:"0 4px 16px rgba(0,0,0,.2)",maxWidth:320,whiteSpace:"pre-line"}}>{toastCp.msg}</div>}
+
+      {/* HEADER PLANEJAMENTO */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,flexWrap:"wrap",gap:8}}>
+        <div style={{fontWeight:700,fontSize:18,color:TX}}>🗂 Central de Planejamento</div>
+        <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+          <button onClick={()=>setShowFormReuniao(true)} style={{background:"#2E7D32",color:"#fff",border:"none",borderRadius:7,padding:"7px 12px",fontSize:11.5,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>👥 Reunião</button>
+          <button onClick={()=>{setEditBlocoId(null);setFormCp(emptyBloco);setShowFormCp(true);}} style={{background:RD,color:"#fff",border:"none",borderRadius:7,padding:"7px 14px",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>+ Bloco</button>
+        </div>
+      </div>
+
+      {/* SUB-NAVEGAÇÃO */}
+      <div style={{display:"flex",gap:0,marginBottom:14,background:"#fff",borderRadius:10,border:`1px solid ${BD}`,overflow:"hidden",flexWrap:"wrap"}}>
+        {[["painel","🧠 Painel IA"],["dia","📅 Dia"],["semana","🗓 Semana"],["mes","📆 Mês"],["historico","✅ Histórico"],["log","📋 Decisões"],["reunioes","👥 Reuniões"]].map(([v,l])=>(
+          <button key={v} style={{flex:1,minWidth:60,background:subView===v?C:"#fff",color:subView===v?"#fff":TX2,border:"none",borderRight:`1px solid ${BD}`,padding:"10px 6px",fontSize:11,fontFamily:"inherit",fontWeight:subView===v?700:400,cursor:"pointer",transition:"all .15s"}} onClick={()=>setSubView(v)}>{l}</button>
+        ))}
+      </div>
+
+      {/* ── PAINEL IA ── */}
+      {subView==="painel"&&<>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:14}}>
+          {[
+            {l:"Hoje Planejado",v:`${Math.floor(horasPlanejadasHoje/60)}h${horasPlanejadasHoje%60>0?horasPlanejadasHoje%60+"m":""}`,c:C,bg:CL},
+            {l:"Concluídos",v:concluidosHoje,c:"#2E7D32",bg:"#E8F5E9"},
+            {l:"Pendentes",v:pendentesHoje,c:RD,bg:RL},
+            {l:"Atrasadas",v:pending?.filter(t=>t.due<todayStr).length||0,c:"#E65100",bg:"#FFF3E0"},
+          ].map(s=>(
+            <div key={s.l} style={{background:s.bg,border:`1px solid ${s.c}33`,borderRadius:10,padding:"10px 12px"}}>
+              <div style={{fontSize:22,fontWeight:700,color:s.c,lineHeight:1}}>{s.v}</div>
+              <div style={{fontSize:9.5,color:s.c,marginTop:2,fontWeight:500}}>{s.l}</div>
+            </div>
+          ))}
+        </div>
+
+        {loadingIA&&<div style={{background:"#fff",border:`1px solid ${BD}`,borderRadius:12,padding:"24px",textAlign:"center",color:TX2}}>
+          <div style={{width:28,height:28,borderRadius:"50%",border:`3px solid ${BD}`,borderTop:`3px solid ${C}`,animation:"spin .8s linear infinite",margin:"0 auto 10px"}}/>
+          Gerando análise inteligente do dia...
+        </div>}
+
+        {painelIA&&!loadingIA&&<>
+          {/* Saudação */}
+          <div style={{background:`linear-gradient(135deg,${C},#0D47A1)`,borderRadius:12,padding:"16px 20px",marginBottom:12,color:"#fff"}}>
+            <div style={{fontSize:16,fontWeight:700,marginBottom:4}}>{painelIA.saudacao}</div>
+            <div style={{fontSize:12.5,opacity:0.9}}>{painelIA.resumo}</div>
+          </div>
+
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+            {/* Sugestão de agenda */}
+            <div style={{background:"#fff",border:`1px solid ${BD}`,borderRadius:12,padding:"14px"}}>
+              <div style={{fontSize:12,fontWeight:700,color:TX,marginBottom:10}}>⚡ Sugestão de Agenda para Hoje</div>
+              {(painelIA.sugestao_agenda||[]).map((s,i)=>(
+                <div key={i} style={{display:"flex",gap:10,marginBottom:8,paddingBottom:8,borderBottom:i<painelIA.sugestao_agenda.length-1?`1px solid ${BD}`:"none"}}>
+                  <div style={{background:CL,color:C,borderRadius:6,padding:"4px 8px",fontSize:10,fontWeight:700,flexShrink:0,whiteSpace:"nowrap"}}>{s.horario}</div>
+                  <div>
+                    <div style={{fontSize:12,fontWeight:600,color:TX}}>{s.tarefa}</div>
+                    <div style={{fontSize:10,color:TX2,marginTop:1}}>{s.motivo}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Indicadores + alertas */}
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              <div style={{background:"#fff",border:`1px solid ${BD}`,borderRadius:12,padding:"14px"}}>
+                <div style={{fontSize:12,fontWeight:700,color:TX,marginBottom:8}}>📊 Carga do Dia</div>
+                <div style={{background:GR,borderRadius:8,height:12,overflow:"hidden",marginBottom:6}}>
+                  <div style={{width:`${Math.min(painelIA.carga_prevista||0,100)}%`,height:"100%",background:(painelIA.carga_prevista||0)>85?RD:(painelIA.carga_prevista||0)>60?"#E65100":C,borderRadius:8,transition:"width .5s"}}/>
+                </div>
+                <div style={{fontSize:13,fontWeight:700,color:(painelIA.carga_prevista||0)>85?RD:C}}>{painelIA.carga_prevista||0}% ocupado</div>
+                <div style={{fontSize:11,color:TX2,marginTop:4}}>🎯 Prioridade máxima: <strong>{painelIA.prioridade_maxima}</strong></div>
+              </div>
+              {(painelIA.alertas||[]).length>0&&<div style={{background:RL,border:`1px solid ${RD}33`,borderRadius:12,padding:"12px"}}>
+                <div style={{fontSize:11,fontWeight:700,color:RD,marginBottom:6}}>⚠️ Alertas</div>
+                {painelIA.alertas.map((a,i)=><div key={i} style={{fontSize:11,color:RD,marginBottom:3}}>• {a}</div>)}
+              </div>}
+            </div>
+          </div>
+
+          <button onClick={gerarPainelIA} style={{background:"#fff",border:`1px solid ${BD}`,color:TX2,borderRadius:8,padding:"8px 16px",fontSize:12,fontFamily:"inherit",cursor:"pointer",marginBottom:12}}>↻ Atualizar análise IA</button>
+        </>}
+
+        {/* Blocos de hoje */}
+        <div style={{fontSize:12,fontWeight:700,color:TX,marginBottom:8,textTransform:"uppercase",letterSpacing:"0.5px"}}>📅 Agenda de Hoje — {new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"numeric",month:"short"})}</div>
+        {blocosDia(todayStr).length===0?<div style={{textAlign:"center",padding:"24px",color:TX2,fontSize:13,background:"#fff",borderRadius:10,border:`1px solid ${BD}`}}>Nenhum bloco agendado para hoje.</div>
+          :blocosDia(todayStr).map(b=><BlocoItem key={b.id} b={b}/>)}
+      </>}
+
+      {/* ── DIA ── */}
+      {subView==="dia"&&<>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+          <button onClick={()=>setDiaOffset(o=>o-1)} style={{background:"#fff",border:`1px solid ${BD}`,borderRadius:6,padding:"5px 11px",cursor:"pointer",fontSize:13}}>‹</button>
+          <span style={{fontWeight:700,fontSize:13,color:C,minWidth:200,textAlign:"center"}}>{diaAtual.toLocaleDateString("pt-BR",{weekday:"long",day:"numeric",month:"long"})}</span>
+          <button onClick={()=>setDiaOffset(o=>o+1)} style={{background:"#fff",border:`1px solid ${BD}`,borderRadius:6,padding:"5px 11px",cursor:"pointer",fontSize:13}}>›</button>
+          {diaOffset!==0&&<button onClick={()=>setDiaOffset(0)} style={{background:CL,border:`1px solid ${C}`,borderRadius:6,padding:"5px 8px",cursor:"pointer",fontSize:10,color:C,fontWeight:600}}>Hoje</button>}
+        </div>
+        {cpIsFerias(diaStr)&&<div style={{background:RL,border:`1px solid ${RD}`,borderRadius:8,padding:"10px 14px",marginBottom:10,fontSize:12,color:RD,fontWeight:600}}>🏖️ Período de férias — Agenda bloqueada (13/07 a 24/07/2026)</div>}
+        {blocosDia(diaStr).length===0?<div style={{textAlign:"center",padding:"32px",color:TX2,background:"#fff",borderRadius:10,border:`1px solid ${BD}`}}>Nenhum bloco para este dia.</div>
+          :blocosDia(diaStr).map(b=><BlocoItem key={b.id} b={b}/>)}
+      </>}
+
+      {/* ── SEMANA ── */}
+      {subView==="semana"&&<>
+        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:10,flexWrap:"wrap"}}>
+          <button onClick={()=>setWeekOffset(o=>o-1)} style={{background:"#fff",border:`1px solid ${BD}`,borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:13}}>‹</button>
+          <span style={{fontWeight:700,fontSize:12,color:C,minWidth:180,textAlign:"center"}}>{cpFmtDate(weekDates[0]).split("-").reverse().join("/").slice(0,5)} – {cpFmtDate(weekDates[4]).split("-").reverse().join("/").slice(0,5)}</span>
+          <button onClick={()=>setWeekOffset(o=>o+1)} style={{background:"#fff",border:`1px solid ${BD}`,borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:13}}>›</button>
+          {weekOffset!==0&&<button onClick={()=>setWeekOffset(0)} style={{background:CL,border:`1px solid ${C}`,borderRadius:6,padding:"4px 8px",cursor:"pointer",fontSize:10,color:C,fontWeight:600}}>Hoje</button>}
+        </div>
+        <div style={{background:"#fff",border:`1px solid ${BD}`,borderRadius:12,overflow:"auto",WebkitOverflowScrolling:"touch"}}>
+          {/* Cabeçalho */}
+          <div style={{display:"grid",gridTemplateColumns:"44px repeat(5,1fr)",borderBottom:`1.5px solid ${BD}`,background:GR}}>
+            <div style={{padding:"6px 4px",fontSize:9,color:TX2,textAlign:"center"}}>h</div>
+            {weekDates.map((d,i)=>{
+              const ds=cpFmtDate(d); const isHoje=ds===todayStr;
+              return<div key={i} style={{padding:"6px 4px",textAlign:"center",borderLeft:`1px solid ${BD}`,background:isHoje?CL:"transparent"}}>
+                <div style={{fontSize:9,color:isHoje?C:TX2,fontWeight:600,textTransform:"uppercase"}}>{CP_DIAS[i].slice(0,3)}</div>
+                <div style={{fontSize:15,fontWeight:700,color:isHoje?C:TX}}>{d.getDate()}</div>
+              </div>;
+            })}
+          </div>
+          {/* Grade */}
+          <div style={{display:"flex"}}>
+            {/* Coluna horas */}
+            <div style={{width:44,flexShrink:0}}>
+              {["08:00","09:00","10:00","11:00","12:00","","14:00","15:00","16:00","17:00"].map((h,i)=>(
+                <div key={i} style={{height:h===""?10:SLOT*4,borderTop:`1px solid ${h===""?BD:"transparent"}`,fontSize:8,color:TX2,paddingLeft:2,paddingTop:1}}>{h}</div>
+              ))}
+            </div>
+            {/* Dias */}
+            {weekDates.map((d,i)=><GradeDia key={i} ds={cpFmtDate(d)} idx={i}/>)}
+          </div>
+        </div>
+      </>}
+
+      {/* ── MÊS ── */}
+      {subView==="mes"&&<>
+        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:10}}>
+          <button onClick={()=>setMesOffset(o=>o-1)} style={{background:"#fff",border:`1px solid ${BD}`,borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:13}}>‹</button>
+          <span style={{fontWeight:700,fontSize:13,color:C,minWidth:130,textAlign:"center"}}>{mesNomeAtual} {mesAno}</span>
+          <button onClick={()=>setMesOffset(o=>o+1)} style={{background:"#fff",border:`1px solid ${BD}`,borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:13}}>›</button>
+          {mesOffset!==0&&<button onClick={()=>setMesOffset(0)} style={{background:CL,border:`1px solid ${C}`,borderRadius:6,padding:"4px 8px",cursor:"pointer",fontSize:10,color:C,fontWeight:600}}>Hoje</button>}
+        </div>
+        <div style={{background:"#fff",border:`1px solid ${BD}`,borderRadius:10,padding:10}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:4}}>
+            {["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"].map(d=><div key={d} style={{textAlign:"center",fontSize:9,fontWeight:600,color:TX2,padding:"2px 0"}}>{d}</div>)}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}}>
+            {Array.from({length:offsetMes},(_,i)=><div key={"e"+i}/>)}
+            {Array.from({length:diasMes},(_,i)=>i+1).map(d=>{
+              const ds=mesDateStr(d); const isHoje=ds===todayStr; const isFer=cpIsFerias(ds);
+              const{data:mesDb}=supabase.from?{data:[]}:{data:[]}; // placeholder — usamos blocos do estado
+              const db=blocos.filter(b=>b.data===ds);
+              const temUrg=db.some(b=>b.prioridade==="urgente");
+              return<div key={d} style={{minHeight:44,border:`1px solid ${isHoje?C:BD}`,borderRadius:5,padding:"3px 4px",background:isFer?"#FFEBEE":isHoje?CL:"#fff",position:"relative"}}>
+                <div style={{fontSize:10,fontWeight:isHoje?700:400,color:isFer?RD:isHoje?C:TX}}>{d}</div>
+                {db.slice(0,2).map(b=><div key={b.id} style={{fontSize:7,background:(CP_CATS[b.categoria]||CP_CATS.gestao).bg,color:(CP_CATS[b.categoria]||CP_CATS.gestao).color,borderRadius:2,padding:"1px 2px",marginTop:1,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{b.titulo}</div>)}
+                {db.length>2&&<div style={{fontSize:7,color:TX2}}>+{db.length-2}</div>}
+                {temUrg&&<div style={{position:"absolute",top:2,right:2,width:5,height:5,borderRadius:"50%",background:RD}}/>}
+                {isFer&&<div style={{position:"absolute",top:1,right:1,fontSize:7}}>🏖</div>}
+              </div>;
+            })}
+          </div>
+        </div>
+      </>}
+
+      {/* ── HISTÓRICO ── */}
+      {subView==="historico"&&<HistoricoView supabase={supabase} TX={TX} TX2={TX2} BD={BD} C={C} CL={CL} GR={GR} CP_CATS={CP_CATS}/>}
+
+      {/* ── LOG DE DECISÕES ── */}
+      {subView==="log"&&<>
+        <div style={{fontSize:12,fontWeight:700,color:TX,marginBottom:10}}>📋 Central de Decisões da IA</div>
+        {log.length===0?<div style={{textAlign:"center",padding:"32px",color:TX2,background:"#fff",borderRadius:10,border:`1px solid ${BD}`}}>Nenhuma decisão registrada ainda.</div>
+          :log.map(l=>(
+            <div key={l.id} style={{background:"#fff",border:`1px solid ${BD}`,borderRadius:8,padding:"10px 14px",marginBottom:7}}>
+              <div style={{display:"flex",gap:8,alignItems:"flex-start"}}>
+                <span style={{fontSize:16,flexShrink:0}}>{l.tipo==="reorganizacao"?"⚡":l.tipo==="ritual"?"✅":l.tipo==="conclusao"?"✓":"📝"}</span>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:12.5,color:TX,fontWeight:500}}>{l.descricao}</div>
+                  <div style={{fontSize:10,color:TX2,marginTop:2}}>{new Date(l.created_at).toLocaleDateString("pt-BR",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</div>
+                </div>
+              </div>
+            </div>
+          ))}
+      </>}
+
+      {/* ── REUNIÕES ── */}
+      {subView==="reunioes"&&<>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+          <div style={{fontSize:12,fontWeight:700,color:TX}}>👥 Reuniões com Clientes</div>
+          <button onClick={()=>setShowFormReuniao(true)} style={{background:"#2E7D32",color:"#fff",border:"none",borderRadius:7,padding:"7px 12px",fontSize:11.5,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>+ Registrar</button>
+        </div>
+        {reunioes.length===0?<div style={{textAlign:"center",padding:"32px",color:TX2,background:"#fff",borderRadius:10,border:`1px solid ${BD}`}}>Nenhuma reunião registrada.</div>
+          :reunioes.map(r=>(
+            <div key={r.id} style={{background:"#fff",border:`1px solid ${BD}`,borderRadius:8,padding:"10px 14px",marginBottom:7}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                <div>
+                  <div style={{fontSize:13,fontWeight:700,color:TX}}>👤 {r.cliente}</div>
+                  <div style={{fontSize:12,color:TX2,marginTop:2}}>{r.assunto}</div>
+                  {r.observacoes&&<div style={{fontSize:11,color:TX2,marginTop:2,fontStyle:"italic"}}>{r.observacoes}</div>}
+                </div>
+                <div style={{textAlign:"right",flexShrink:0}}>
+                  <div style={{fontSize:11,fontWeight:600,color:C}}>{cpPtDate(r.data)}</div>
+                  {r.hora&&<div style={{fontSize:10,color:TX2}}>{r.hora} · {r.duracao}min</div>}
+                  <div style={{fontSize:10,background:r.status==="realizada"?"#E8F5E9":"#E3F0FF",color:r.status==="realizada"?"#2E7D32":C,borderRadius:4,padding:"1px 6px",marginTop:3,display:"inline-block",fontWeight:600}}>{r.status}</div>
+                </div>
+              </div>
+            </div>
+          ))}
+      </>}
+
+      {/* MODAL NOVO BLOCO */}
+      {showFormCp&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(20,40,80,0.4)",zIndex:500,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={e=>e.target===e.currentTarget&&setShowFormCp(false)}>
+          <div style={{background:"#fff",borderRadius:"16px 16px 0 0",padding:"20px 16px 32px",width:"100%",maxWidth:540,maxHeight:"92vh",overflowY:"auto"}}>
+            <div style={{width:36,height:4,background:BD,borderRadius:2,margin:"0 auto 14px"}}/>
+            <div style={{fontWeight:700,fontSize:16,color:C,marginBottom:14,borderBottom:`2px solid ${CL}`,paddingBottom:10}}>{editBlocoId?"✏️ Editar Bloco":"✨ Novo Bloco"}</div>
+            <div style={{display:"flex",flexDirection:"column",gap:11}}>
+              <div><label style={lbl}>Título *</label>
+                <input style={inp} value={formCp.titulo} onChange={e=>{
+                  const t=e.target.value;
+                  const cat=Object.entries(CP_CATS).find(([k,v])=>t.toLowerCase().includes(v.label.toLowerCase()));
+                  if(cat) setFormCp(f=>({...f,titulo:t,categoria:cat[0],prioridade:cat[1].prioBase,hora_fim:cpAddMin(f.hora_inicio,cat[1].tempo)}));
+                  else setFormCp(f=>({...f,titulo:t}));
+                }} placeholder="Ex: Admissão João Silva, Folha Cantina..."/>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                <div><label style={lbl}>Categoria</label>
+                  <select style={inp} value={formCp.categoria} onChange={e=>{const cat=CP_CATS[e.target.value];setFormCp(f=>({...f,categoria:e.target.value,prioridade:cat?.prioBase||"media",hora_fim:cpAddMin(f.hora_inicio,cat?.tempo||60)}));}}>
+                    {Object.entries(CP_CATS).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}
+                  </select>
+                </div>
+                <div><label style={lbl}>Prioridade</label>
+                  <select style={inp} value={formCp.prioridade} onChange={e=>setFormCp(f=>({...f,prioridade:e.target.value}))}>
+                    {Object.entries(CP_PRIOS).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div><label style={lbl}>Cliente</label><input style={inp} value={formCp.cliente} onChange={e=>setFormCp(f=>({...f,cliente:e.target.value}))} placeholder="Nome do cliente..."/></div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+                <div><label style={lbl}>Data</label><input type="date" style={inp} value={formCp.data} onChange={e=>setFormCp(f=>({...f,data:e.target.value}))}/></div>
+                <div><label style={lbl}>Início</label>
+                  <select style={inp} value={formCp.hora_inicio} onChange={e=>{const hi=e.target.value;setFormCp(f=>({...f,hora_inicio:hi,hora_fim:cpAddMin(hi,f.tempo_previsto)}));}}>
+                    {["08:00","08:15","08:30","08:45","09:00","09:15","09:30","09:45","10:00","10:15","10:30","10:45","11:00","11:15","11:30","11:45","14:00","14:15","14:30","14:45","15:00","15:15","15:30","15:45","16:00","16:15","16:30","16:45"].map(h=><option key={h} value={h}>{h}</option>)}
+                  </select>
+                </div>
+                <div><label style={lbl}>Fim</label>
+                  <select style={inp} value={formCp.hora_fim} onChange={e=>setFormCp(f=>({...f,hora_fim:e.target.value,tempo_previsto:cpToMin(e.target.value)-cpToMin(f.hora_inicio)}))}>
+                    {["08:15","08:30","08:45","09:00","09:15","09:30","09:45","10:00","10:15","10:30","10:45","11:00","11:15","11:30","11:45","12:00","14:15","14:30","14:45","15:00","15:15","15:30","15:45","16:00","16:15","16:30","16:45","17:00"].map(h=><option key={h} value={h}>{h}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div><label style={lbl}>Observações</label><textarea style={{...inp,resize:"none"}} rows={2} value={formCp.observacoes} onChange={e=>setFormCp(f=>({...f,observacoes:e.target.value}))} placeholder="Notas adicionais..."/></div>
+              <div style={{display:"flex",gap:8,marginTop:4}}>
+                <button onClick={()=>setShowFormCp(false)} style={{flex:1,background:"#fff",border:`1px solid ${BD}`,color:TX2,borderRadius:8,padding:"12px",fontSize:14,fontFamily:"inherit",cursor:"pointer"}}>Cancelar</button>
+                <button onClick={saveBloco} style={{flex:2,background:C,color:"#fff",border:"none",borderRadius:8,padding:"12px",fontSize:14,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>{editBlocoId?"Salvar":"Criar"}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL REUNIÃO */}
+      {showFormReuniao&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(20,40,80,0.4)",zIndex:500,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={e=>e.target===e.currentTarget&&setShowFormReuniao(false)}>
+          <div style={{background:"#fff",borderRadius:"16px 16px 0 0",padding:"20px 16px 32px",width:"100%",maxWidth:540,maxHeight:"85vh",overflowY:"auto"}}>
+            <div style={{width:36,height:4,background:BD,borderRadius:2,margin:"0 auto 14px"}}/>
+            <div style={{fontWeight:700,fontSize:16,color:"#2E7D32",marginBottom:14,borderBottom:"2px solid #E8F5E9",paddingBottom:10}}>👥 Registrar Reunião</div>
+            <div style={{display:"flex",flexDirection:"column",gap:11}}>
+              <div><label style={lbl}>Cliente *</label><input style={inp} value={formReuniao.cliente} onChange={e=>setFormReuniao(f=>({...f,cliente:e.target.value}))} placeholder="Nome do cliente..."/></div>
+              <div><label style={lbl}>Assunto</label><input style={inp} value={formReuniao.assunto} onChange={e=>setFormReuniao(f=>({...f,assunto:e.target.value}))} placeholder="Pauta da reunião..."/></div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+                <div><label style={lbl}>Data</label><input type="date" style={inp} value={formReuniao.data} onChange={e=>setFormReuniao(f=>({...f,data:e.target.value}))}/></div>
+                <div><label style={lbl}>Hora</label><input type="time" style={inp} value={formReuniao.hora} onChange={e=>setFormReuniao(f=>({...f,hora:e.target.value}))}/></div>
+                <div><label style={lbl}>Duração (min)</label><input type="number" style={inp} value={formReuniao.duracao} onChange={e=>setFormReuniao(f=>({...f,duracao:Number(e.target.value)}))} min={15} step={15}/></div>
+              </div>
+              <div><label style={lbl}>Status</label>
+                <select style={inp} value={formReuniao.status} onChange={e=>setFormReuniao(f=>({...f,status:e.target.value}))}>
+                  <option value="agendada">Agendada</option>
+                  <option value="realizada">Realizada</option>
+                  <option value="cancelada">Cancelada</option>
+                </select>
+              </div>
+              <div><label style={lbl}>Observações</label><textarea style={{...inp,resize:"none"}} rows={2} value={formReuniao.observacoes} onChange={e=>setFormReuniao(f=>({...f,observacoes:e.target.value}))} placeholder="Pauta, decisões, próximos passos..."/></div>
+              <div style={{display:"flex",gap:8,marginTop:4}}>
+                <button onClick={()=>setShowFormReuniao(false)} style={{flex:1,background:"#fff",border:`1px solid ${BD}`,color:TX2,borderRadius:8,padding:"12px",fontSize:14,fontFamily:"inherit",cursor:"pointer"}}>Cancelar</button>
+                <button onClick={saveReuniao} style={{flex:2,background:"#2E7D32",color:"#fff",border:"none",borderRadius:8,padding:"12px",fontSize:14,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>Registrar</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HistoricoView({ supabase, TX, TX2, BD, C, CL, GR, CP_CATS }){
+  const [hist,setHist]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [busca,setBusca]=useState("");
+  const [filtroCliente,setFiltroCliente]=useState("");
+
+  useEffect(()=>{ fetchHist(); },[]);
+
+  async function fetchHist(){
+    setLoading(true);
+    const{data}=await supabase.from("planejamento").select("*").eq("concluido",true).order("updated_at",{ascending:false}).limit(100);
+    setHist(data||[]); setLoading(false);
+  }
+
+  const filtrado=hist.filter(h=>{
+    const q=busca.toLowerCase();
+    const matchBusca=!busca||(h.titulo||"").toLowerCase().includes(q)||(h.cliente||"").toLowerCase().includes(q)||(h.observacoes||"").toLowerCase().includes(q);
+    const matchCliente=!filtroCliente||(h.cliente||"").toLowerCase().includes(filtroCliente.toLowerCase());
+    return matchBusca&&matchCliente;
+  });
+
+  const clientes=[...new Set(hist.map(h=>h.cliente).filter(Boolean))].sort();
+
+  if(loading) return<div style={{textAlign:"center",padding:"24px",color:TX2}}>Carregando histórico...</div>;
+
+  return(
+    <div>
+      <div style={{fontSize:12,fontWeight:700,color:TX,marginBottom:10}}>✅ Histórico de Concluídos ({hist.length})</div>
+      <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+        <input style={{flex:2,background:"#fff",border:`1px solid ${BD}`,borderRadius:8,padding:"8px 11px",color:TX,fontSize:13,fontFamily:"inherit"}} placeholder="🔍 Buscar por tarefa, cliente..." value={busca} onChange={e=>setBusca(e.target.value)}/>
+        <select style={{flex:1,background:"#fff",border:`1px solid ${BD}`,borderRadius:8,padding:"8px 10px",color:TX,fontSize:12,fontFamily:"inherit"}} value={filtroCliente} onChange={e=>setFiltroCliente(e.target.value)}>
+          <option value="">Todos clientes</option>
+          {clientes.map(c=><option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+      {filtrado.length===0?<div style={{textAlign:"center",padding:"32px",color:TX2,background:"#fff",borderRadius:10,border:`1px solid ${BD}`}}>Nenhum resultado.</div>
+        :filtrado.map(h=>{
+          const cat=CP_CATS[h.categoria]||{label:h.categoria,color:C,bg:CL,icon:"📋"};
+          return(
+            <div key={h.id} style={{background:"#fff",border:`1px solid ${BD}`,borderLeft:`4px solid ${cat.color}`,borderRadius:8,padding:"9px 12px",marginBottom:6,opacity:0.85}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:12.5,fontWeight:600,color:TX,textDecoration:"line-through"}}>{h.titulo}</div>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:3}}>
+                    <span style={{fontSize:9.5,background:cat.bg,color:cat.color,border:`1px solid ${cat.color}44`,borderRadius:4,padding:"1px 6px",fontWeight:600}}>{cat.icon} {cat.label}</span>
+                    {h.cliente&&<span style={{fontSize:9.5,color:TX2}}>👤 {h.cliente}</span>}
+                    <span style={{fontSize:9.5,color:TX2}}>⏱ {h.tempo_previsto||0}min</span>
+                  </div>
+                </div>
+                <div style={{textAlign:"right",flexShrink:0}}>
+                  <div style={{fontSize:10.5,color:C,fontWeight:600}}>{h.data?.split("-").reverse().join("/")}</div>
+                  <div style={{fontSize:9.5,color:TX2}}>{h.hora_inicio}–{h.hora_fim}</div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+    </div>
+  );
+}
+
 
 // ─────────────────────────────────────────────────────────────
 // MÓDULO: PLANEJAMENTO SEMANAL
