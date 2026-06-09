@@ -160,11 +160,9 @@ function montarAgendaDia(tasks){
     // Usar tempo_estimado do tipo_atividade se disponível
     const tipoInfo=TIPOS_ATIVIDADE[t.tipo_atividade];
     const duracao=t.tempo_estimado||tipoInfo?.tempo||TEMPO_POR_CATEGORIA[t.category]||60;
-    // Pular tarefas que não permitem agendamento automático
+    // Pular apenas se explicitamente marcado para não agendar
     if(t.permite_agendamento===false)continue;
-    // Pular admissões sem documentação completa
-    if(t.tipo_atividade==="admissao"&&!t.documentacao_completa)continue;
-    // Pular tarefas aguardando informações
+    // Pular tarefas aguardando informações (somente se campo preenchido)
     if(t.status_operacional==="aguardando_info"||t.status_operacional==="aguardando_cliente")continue;
     // Avançar sobre blocos fixos
     let tentativas=0;
@@ -189,7 +187,7 @@ function montarAgendaDia(tasks){
     agendados.push({inicio:horaAtual,fim:horaFim});
     horaAtual=addMin(horaFim,5);
     tarefasInseridas++;
-    if(tarefasInseridas>=7)break;
+    if(tarefasInseridas>=10)break;
   }
 
   // Blocos de atendimento
