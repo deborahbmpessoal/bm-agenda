@@ -5,7 +5,156 @@ const SUPABASE_URL = "https://dmugffjkrrgndrtbdotm.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRtdWdmZmprcnJnbmRydGJkb3RtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwNDQ2NTEsImV4cCI6MjA5NTYyMDY1MX0.pt2Z_UA2Y3eTBvYTWN3gShlG1v3-WIfDDVpJ0DnGVjc";
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-const BLUE="#1565C0",BLUE_LIGHT="#E3F0FF",RED="#C62828",RED_LIGHT="#FFEBEE",GRAY="#F5F6FA",BORDER="#DDE3F0",TEXT="#1A2340",TEXT2="#5A6580";
+// ═══════════════════════════════════════════════
+// DESIGN TOKENS — OFF WHITE + AZUL MARINHO + VERMELHO
+// ═══════════════════════════════════════════════
+const NM   = "#0F2040";   // azul marinho
+const NM2  = "#1A3560";   // azul marinho médio
+const NML  = "#E8EDF5";   // azul marinho claro
+const NML2 = "#F0F3F8";   // azul marinho muito claro
+const RD   = "#C41E3A";   // vermelho
+const RDL  = "#FCEEF1";   // vermelho claro
+const OW   = "#F8F7F4";   // off-white fundo
+const OW2  = "#FFFFFF";   // branco puro cards
+const BD   = "#E2E6EE";   // borda
+const TX   = "#0F2040";   // texto principal
+const TX2  = "#6B7A99";   // texto secundário
+const TX3  = "#A0AABF";   // texto terciário
+
+// Remapear cores existentes para novo design
+const BLUE       = NM;
+const BLUE_LIGHT = NML;
+const RED        = RD;
+const RED_LIGHT  = RDL;
+const GRAY       = OW;
+const BORDER     = BD;
+const TEXT       = TX;
+const TEXT2      = TX2;
+
+const NAV_ITEMS=[
+  {id:"agenda",  icon:"📅", label:"Agenda"},
+  {id:"clientes",icon:"👥", label:"Clientes"},
+  {id:"tarefas", icon:"📋", label:"Tarefas"},
+  {id:"dashboard",icon:"📈",label:"Dashboard"},
+  {id:"fechamento",icon:"📁",label:"Fechamento"},
+];
+
+// ── LÓGICA DE AGENDA INTELIGENTE ──
+const TEMPO_POR_CATEGORIA = {
+  dp:30, fiscal:60, contabil:60, financeiro:30,
+  administrativo:30, cliente:30, rescisao:60,
+};
+const BLOCOS_ATENDIMENTO = [
+  {inicio:"09:00",fim:"09:30"},{inicio:"10:30",fim:"11:00"},
+  {inicio:"14:00",fim:"14:30"},{inicio:"15:30",fim:"16:00"},
+];
+const SLOTS_DISPONIVEIS = [
+  "08:15","08:45","09:00","09:30","10:00","10:30","11:00","11:30",
+  "14:00","14:30","15:00","15:30","16:00","16:30",
+];
+
+function toMin(t){const[h,m]=t.split(":").map(Number);return h*60+m;}
+function addMin(t,m){const tot=toMin(t)+m;return`${String(Math.floor(tot/60)).padStart(2,"0")}:${String(tot%60).padStart(2,"0")}`;}
+function slotLivre(hora,duracaoMin,agendados){
+  const inicio=toMin(hora); const fim=inicio+duracaoMin;
+  if(fim>toMin("12:00")&&inicio<toMin("14:00"))return false;
+  if(fim>toMin("17:00"))return false;
+  return!agendados.some(a=>{
+    const ai=toMin(a.inicio); const af=toMin(a.fim);
+    return inicio<af&&fim>ai;
+  });
+}
+
+function montarAgendaDia(tasks){
+  // Filtra tarefas pendentes para hoje e próximos dias
+  const hoje=new Date(); hoje.setHours(0,0,0,0);
+  const todayS=hoje.toISOString().split("T")[0];
+  const in7=new Date(hoje); in7.setDate(hoje.getDate()+7);
+  const in7S=in7.toISOString().split("T")[0];
+
+  const candidatas=[...tasks]
+    .filter(t=>!t.done&&t.due<=in7S)
+    .sort((a,b)=>{
+      const ordemPri={urgente:0,alta:1,media:2,baixa:3};
+      const pa=ordemPri[a.priority]||2; const pb=ordemPri[b.priority]||2;
+      if(pa!==pb)return pa-pb;
+      return a.due<b.due?-1:1;
+    });
+
+  // Blocos fixos já alocados
+  const agendados=[
+    {inicio:"08:00",fim:"08:15",tipo:"checkin"},
+    {inicio:"09:00",fim:"09:30",tipo:"atendimento"},
+    {inicio:"10:30",fim:"11:00",tipo:"atendimento"},
+    {inicio:"14:00",fim:"14:30",tipo:"atendimento"},
+    {inicio:"15:30",fim:"16:00",tipo:"atendimento"},
+    {inicio:"16:45",fim:"17:00",tipo:"checkout"},
+  ];
+
+  const agenda=[];
+  let horaAtual="08:15";
+
+  // Check-in sempre primeiro
+  agenda.push({hora:"08:00",horaFim:"08:15",titulo:"✅ Check-in Diário",tipo:"ritual",cor:NM,obs:"Revisão de prioridades · Urgências · Organização do dia"});
+
+  for(const t of candidatas){
+    const duracao=t.tempo_estimado||TEMPO_POR_CATEGORIA[t.category]||60;
+    // Pular se hora atual é horário de atendimento
+    for(const b of BLOCOS_ATENDIMENTO){
+      if(toMin(horaAtual)>=toMin(b.inicio)&&toMin(horaAtual)<toMin(b.fim)){
+        horaAtual=b.fim;
+      }
+    }
+    // Pular intervalo almoço
+    if(toMin(horaAtual)>=toMin("12:00")&&toMin(horaAtual)<toMin("14:00")){
+      horaAtual="14:00";
+    }
+    // Verificar se cabe
+    if(!slotLivre(horaAtual,duracao,agendados)) continue;
+    const horaFim=addMin(horaAtual,duracao);
+    // Verificar se a hora fim não passa por blocos fixos
+    let colide=false;
+    for(const b of BLOCOS_ATENDIMENTO){
+      if(toMin(horaAtual)<toMin(b.fim)&&toMin(horaFim)>toMin(b.inicio)){colide=true;break;}
+    }
+    if(colide) continue;
+    agenda.push({hora:horaAtual,horaFim,titulo:t.title,tipo:"tarefa",cor:CATEGORIES[t.category]?.color||NM,cat:t.category,pri:t.priority,cliente:t.client,id:t.id});
+    agendados.push({inicio:horaAtual,fim:horaFim});
+    horaAtual=addMin(horaFim,5);
+    if(agenda.length>=8)break;
+  }
+
+  // Blocos de atendimento
+  BLOCOS_ATENDIMENTO.forEach(b=>{
+    agenda.push({hora:b.inicio,horaFim:b.fim,titulo:"👥 Atendimento Clientes",tipo:"atendimento",cor:"#2E7D32"});
+  });
+
+  // Check-out
+  agenda.push({hora:"16:45",horaFim:"17:00",titulo:"🔍 Check-out Diário",tipo:"ritual",cor:NM,obs:"Conferência de entregas · Pendências · Planejamento amanhã"});
+
+  return agenda.sort((a,b)=>toMin(a.hora)-toMin(b.hora));
+}
+
+function gerarResumoIA(tasks,agenda){
+  const hoje=new Date(); hoje.setHours(0,0,0,0);
+  const todayS=hoje.toISOString().split("T")[0];
+  const atrasadas=tasks.filter(t=>!t.done&&t.due<todayS);
+  const urgentes=tasks.filter(t=>!t.done&&(t.priority==="urgente"||t.priority==="alta"));
+  const tarefasHoje=agenda.filter(a=>a.tipo==="tarefa");
+  const carga=Math.min(Math.round((tarefasHoje.length/6)*100),100);
+  const hora=hoje.getHours();
+  const saudacao=hora<12?"Bom dia":hora<18?"Boa tarde":"Boa noite";
+
+  const alertas=[];
+  if(atrasadas.length>0)alertas.push(`${atrasadas.length} tarefa${atrasadas.length>1?"s":""} em atraso`);
+  const admissoes=tasks.filter(t=>!t.done&&t.category==="dp"&&t.title.toLowerCase().includes("admissão"));
+  if(admissoes.length>0)alertas.push(`${admissoes.length} admissão${admissoes.length>1?"ões":""} pendente${admissoes.length>1?"s":""}`);
+
+  const prioMax=urgentes[0]?.title||"Nenhuma urgência";
+
+  return{saudacao:`${saudacao}, Deborah!`,alertas,carga,prioMax,totalHoje:tarefasHoje.length};
+}
+
 
 const CATEGORIES={
   dp:{label:"Dep. Pessoal",color:"#6A1B9A",bg:"#F3E5F5",icon:"👥"},
@@ -79,14 +228,7 @@ const STATUS_CYCLE=["pendente","andamento","entregue"];
 const STATUS_ICON={"pendente":"⬜","andamento":"🟡","entregue":"✅"};
 
 // MENU INFERIOR — ícones e labels
-const NAV_ITEMS=[
-  {id:"agenda",icon:"📅",label:"Hoje"},
-  {id:"clientes",icon:"👥",label:"Clientes"},
-  {id:"tarefas",icon:"📋",label:"Tarefas"},
-  {id:"planejamento",icon:"🗂",label:"Planejar"},
-  {id:"dashboard",icon:"📈",label:"Dashboard"},
-  {id:"fechamento",icon:"📁",label:"Fechamento"},
-];
+
 
 function norm(s){return String(s).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9 ]/g," ").replace(/\s+/g," ").trim();}
 function findEmpresa(txt,lista){let best=null;let bestScore=0;for(const emp of lista){const e=norm(emp);const t=norm(txt);if(t.includes(e))return emp;const words=e.split(" ").filter(w=>w.length>2);const score=words.filter(w=>t.includes(w)).length/Math.max(words.length,1);if(score>bestScore&&score>=0.5){bestScore=score;best=emp;}}return best;}
@@ -301,35 +443,40 @@ export default function App(){
   ];
 
   const S={
-    root:{fontFamily:"'Segoe UI',Arial,sans-serif",background:"#F0F3FA",minHeight:"100vh",color:TEXT,paddingBottom:72},
-    header:{background:"#fff",borderBottom:`2px solid ${BLUE}`,padding:"0 14px",height:56,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100,gap:5},
-    logoMark:{width:30,height:30,borderRadius:7,background:BLUE,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:700,fontSize:12,flexShrink:0},
-    logoName:{fontSize:11.5,fontWeight:700,color:BLUE},
-    logoSub:{fontSize:8,color:TEXT2,textTransform:"uppercase",letterSpacing:"1px"},
+    root:{fontFamily:"'Inter','Segoe UI',Arial,sans-serif",background:OW,minHeight:"100vh",color:TX,paddingBottom:72},
+    // HEADER
+    header:{background:NM,padding:"0 20px",height:56,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100,gap:8,boxShadow:"0 2px 12px rgba(15,32,64,.18)"},
+    logoMark:{width:32,height:32,borderRadius:7,background:RD,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:800,fontSize:13,flexShrink:0,letterSpacing:"-0.5px"},
+    logoName:{fontSize:13,fontWeight:700,color:"#fff",letterSpacing:"-0.2px"},
+    logoSub:{fontSize:8.5,color:"rgba(255,255,255,0.55)",textTransform:"uppercase",letterSpacing:"1.2px"},
+    addBtn:{background:RD,color:"#fff",border:"none",borderRadius:7,padding:"7px 14px",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer",flexShrink:0,letterSpacing:"0.2px"},
+    quickBtn:(c)=>({background:"rgba(255,255,255,0.12)",color:"#fff",border:"1px solid rgba(255,255,255,0.2)",borderRadius:7,padding:"6px 10px",fontSize:11,fontWeight:600,fontFamily:"inherit",cursor:"pointer",flexShrink:0}),
     // MENU INFERIOR
-    bottomNav:{position:"fixed",bottom:0,left:0,right:0,background:"#fff",borderTop:`1.5px solid ${BORDER}`,display:"flex",alignItems:"center",justifyContent:"space-around",height:62,zIndex:200,padding:"0 4px"},
-    navItem:(active)=>({display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,padding:"6px 4px",cursor:"pointer",flex:1,borderRadius:8,background:active?BLUE_LIGHT:"transparent",transition:"background .15s"}),
-    navIcon:(active)=>({fontSize:18,lineHeight:1}),
-    navLabel:(active)=>({fontSize:9,fontWeight:active?700:400,color:active?BLUE:TEXT2,lineHeight:1}),
+    bottomNav:{position:"fixed",bottom:0,left:0,right:0,background:NM,borderTop:"none",display:"flex",alignItems:"center",justifyContent:"space-around",height:64,zIndex:200,padding:"0 4px",boxShadow:"0 -2px 16px rgba(15,32,64,.2)"},
+    navItem:(a)=>({display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,padding:"6px 8px",cursor:"pointer",flex:1,borderRadius:8,background:a?"rgba(196,30,58,0.15)":"transparent",transition:"background .15s"}),
+    navIcon:()=>({fontSize:19,lineHeight:1}),
+    navLabel:(a)=>({fontSize:9,fontWeight:a?700:400,color:a?"#fff":"rgba(255,255,255,0.5)",lineHeight:1,letterSpacing:"0.3px"}),
     // CONTEÚDO
-    main:{maxWidth:900,margin:"0 auto",padding:"14px 12px"},
-    card:{background:"#fff",border:`1px solid ${BORDER}`,borderRadius:10,padding:"11px 13px",display:"flex",alignItems:"flex-start",gap:9,marginBottom:7},
-    badge:(c,bg)=>({background:bg,color:c,border:`1px solid ${c}33`,borderRadius:5,padding:"1px 6px",fontSize:9.5,fontWeight:600,whiteSpace:"nowrap"}),
-    circle:(c)=>({width:22,height:22,borderRadius:"50%",border:`2px solid ${c}`,flexShrink:0,cursor:"pointer",marginTop:2,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:c}),
-    doneDot:{width:22,height:22,borderRadius:"50%",background:"#2E7D32",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"#fff",cursor:"pointer",marginTop:2},
-    section:{fontWeight:700,fontSize:17,color:TEXT,marginBottom:3},
-    sub:{fontSize:11,color:TEXT2,marginBottom:12},
-    overlay:{position:"fixed",inset:0,background:"rgba(20,40,80,0.4)",zIndex:300,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:0},
-    modal:{background:"#fff",borderRadius:"16px 16px 0 0",padding:"20px 16px 32px",width:"100%",maxWidth:540,maxHeight:"92vh",overflowY:"auto"},
-    lbl:{fontSize:10,color:TEXT2,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:"0.5px",fontWeight:600},
-    inp:{width:"100%",background:GRAY,border:`1px solid ${BORDER}`,borderRadius:8,padding:"10px 11px",color:TEXT,fontSize:14,fontFamily:"inherit"},
+    main:{maxWidth:1100,margin:"0 auto",padding:"20px 16px"},
+    // CARDS
+    card:{background:OW2,border:`1px solid ${BD}`,borderRadius:12,padding:"13px 16px",display:"flex",alignItems:"flex-start",gap:10,marginBottom:8,boxShadow:"0 1px 4px rgba(15,32,64,.04)"},
+    badge:(c,bg)=>({background:bg,color:c,border:`1px solid ${c}22`,borderRadius:5,padding:"2px 7px",fontSize:9.5,fontWeight:600,whiteSpace:"nowrap",letterSpacing:"0.2px"}),
+    circle:(c)=>({width:22,height:22,borderRadius:"50%",border:`2px solid ${c}`,flexShrink:0,cursor:"pointer",marginTop:2,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:c,transition:"transform .15s"}),
+    doneDot:{width:22,height:22,borderRadius:"50%",background:"#1B6B3A",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"#fff",cursor:"pointer",marginTop:2},
+    section:{fontWeight:700,fontSize:20,color:TX,marginBottom:3,letterSpacing:"-0.3px"},
+    sub:{fontSize:12,color:TX2,marginBottom:16},
+    overlay:{position:"fixed",inset:0,background:"rgba(15,32,64,0.55)",zIndex:300,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:0},
+    modal:{background:OW2,borderRadius:"20px 20px 0 0",padding:"20px 20px 36px",width:"100%",maxWidth:540,maxHeight:"93vh",overflowY:"auto",boxShadow:"0 -8px 40px rgba(15,32,64,.2)"},
+    lbl:{fontSize:10.5,color:TX2,display:"block",marginBottom:5,textTransform:"uppercase",letterSpacing:"0.6px",fontWeight:600},
+    inp:{width:"100%",background:OW,border:`1.5px solid ${BD}`,borderRadius:9,padding:"10px 13px",color:TX,fontSize:13.5,fontFamily:"inherit",transition:"border-color .15s"},
   };
 
   if(loading)return(
-    <div style={{...S.root,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:14,paddingBottom:0}}>
-      <div style={{width:32,height:32,borderRadius:"50%",border:`3px solid ${BORDER}`,borderTop:`3px solid ${BLUE}`,animation:"spin .8s linear infinite"}}/>
+    <div style={{fontFamily:"'Inter','Segoe UI',sans-serif",background:"#F8F7F4",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:16}}>
+      <div style={{width:40,height:40,borderRadius:"50%",border:"3px solid #E2E6EE",borderTop:"3px solid #0F2040",animation:"spin .8s linear infinite"}}/>
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-      <div style={{color:TEXT2,fontSize:13}}>Carregando...</div>
+      <div style={{fontSize:15,fontWeight:600,color:"#0F2040",letterSpacing:"-0.2px"}}>BM CONTABILIDADE</div>
+      <div style={{fontSize:12,color:"#6B7A99"}}>Carregando agenda...</div>
     </div>
   );
 
@@ -369,178 +516,21 @@ export default function App(){
           ))}
         </div>
 
-        {/* ── HOJE ── */}
-        {view==="agenda"&&<>
-          <div style={S.section}>Agenda de Hoje</div>
-          <div style={S.sub}>{today.toLocaleDateString("pt-BR",{weekday:"long",day:"numeric",month:"long"})}</div>
+        {/* ── AGENDA INTELIGENTE ── */}
+        {view==="agenda"&&<AgendaInteligente
+          tasks={tasks} pending={pending} done={done}
+          todayTasks={todayTasks} urgentesTab={urgentesTab} comunsTab={comunsTab}
+          weekDays={weekDays} weekStart={weekStart} weekTasksFor={weekTasksFor}
+          mesDias={mesDias} mesDateStr={mesDateStr} mesTasksFor={mesTasksFor}
+          mesNome={mesNome} mesAno={mesAno} mesOffset={mesOffset} setMesOffset={setMesOffset}
+          offsetInicio={offsetInicio} todayStr={todayStr}
+          onToggle={toggleDone} onEdit={openEdit} onDelete={deleteTask}
+          S={S} in2days={in2days}
+        />}
 
-          {/* ABAS URGENTES / COMUNS */}
-          <div style={{display:"flex",gap:0,marginBottom:14,background:"#fff",borderRadius:10,border:`1px solid ${BORDER}`,overflow:"hidden"}}>
-            <button onClick={()=>setAgendaTab("urgentes")} style={{flex:1,background:agendaTab==="urgentes"?RED:"#fff",color:agendaTab==="urgentes"?"#fff":TEXT2,border:"none",padding:"11px 0",fontSize:13,fontWeight:700,fontFamily:"inherit",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:6,transition:"all .15s"}}>
-              🔴 Urgentes
-              {urgentesTab.length>0&&<span style={{background:agendaTab==="urgentes"?"rgba(255,255,255,0.3)":RED_LIGHT,color:agendaTab==="urgentes"?"#fff":RED,borderRadius:10,padding:"1px 7px",fontSize:11,fontWeight:700}}>{urgentesTab.length}</span>}
-            </button>
-            <div style={{width:1,background:BORDER}}/>
-            <button onClick={()=>setAgendaTab("comuns")} style={{flex:1,background:agendaTab==="comuns"?BLUE:"#fff",color:agendaTab==="comuns"?"#fff":TEXT2,border:"none",padding:"11px 0",fontSize:13,fontWeight:700,fontFamily:"inherit",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:6,transition:"all .15s"}}>
-              📋 Tarefas do Dia
-              {comunsTab.length>0&&<span style={{background:agendaTab==="comuns"?"rgba(255,255,255,0.3)":BLUE_LIGHT,color:agendaTab==="comuns"?"#fff":BLUE,borderRadius:10,padding:"1px 7px",fontSize:11,fontWeight:700}}>{comunsTab.length}</span>}
-            </button>
-          </div>
+        
 
-          {agendaTab==="urgentes"&&<>
-            {urgentesTab.length===0
-              ?<Empty icon="✅" msg="Nenhuma tarefa urgente!" sub="Você está em dia com as prioridades."/>
-              :urgentesTab.map((t,i)=><Card key={t.id} t={t} i={i} S={S} onToggle={()=>toggleDone(t)} onEdit={()=>openEdit(t)} onDelete={()=>deleteTask(t.id)}/>)
-            }
-          </>}
-
-          {agendaTab==="comuns"&&<>
-            {comunsTab.length===0
-              ?<Empty icon="🎉" msg="Nenhuma tarefa comum para hoje!" sub="Clique em '+ Nova' para adicionar."/>
-              :comunsTab.map((t,i)=><Card key={t.id} t={t} i={i} S={S} onToggle={()=>toggleDone(t)} onEdit={()=>openEdit(t)} onDelete={()=>deleteTask(t.id)}/>)
-            }
-          </>}
-        </>}
-
-        {/* ── SEMANA ── */}
-        {view==="semana"&&<>
-          <div style={S.section}>Agenda da Semana</div>
-          <div style={S.sub}>{weekStart.toLocaleDateString("pt-BR",{day:"numeric",month:"short"})} – {addDays(weekStart,6).toLocaleDateString("pt-BR",{day:"numeric",month:"short",year:"numeric"})}</div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4,marginBottom:14}}>
-            {weekDays.map((day,i)=>{const ds=fmtDate(day);const dt=weekTasksFor(ds);const isToday=ds===todayStr;const isPast=ds<todayStr;
-              return(<div key={ds} style={{background:isToday?BLUE_LIGHT:"#fff",border:`1px solid ${isToday?BLUE:BORDER}`,borderRadius:8,padding:"6px 5px",minHeight:90}}>
-                <div style={{fontSize:8.5,color:isToday?BLUE:TEXT2,fontWeight:600,textTransform:"uppercase"}}>{WDAYS[i]}</div>
-                <div style={{fontSize:15,fontWeight:700,color:isToday?BLUE:isPast?"#C5CAD8":TEXT}}>{day.getDate()}</div>
-                <div style={{display:"flex",flexDirection:"column",gap:2,marginTop:3}}>
-                  {dt.map(t=><div key={t.id} style={{background:CATEGORIES[t.category]?.bg||BLUE_LIGHT,color:CATEGORIES[t.category]?.color||BLUE,borderRadius:3,padding:"2px 3px",fontSize:8,lineHeight:1.3,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{CATEGORIES[t.category]?.icon} {t.title}</div>)}
-                  {dt.length===0&&<div style={{fontSize:9,color:"#C5CAD8",textAlign:"center",marginTop:4}}>—</div>}
-                </div>
-              </div>);})}
-          </div>
-          {weekDays.map((day,i)=>{const ds=fmtDate(day);const dt=weekTasksFor(ds);if(!dt.length)return null;const isToday=ds===todayStr;
-            return(<div key={ds} style={{marginBottom:12}}>
-              <div style={{fontSize:11,fontWeight:700,color:isToday?BLUE:TEXT2,marginBottom:6,display:"flex",alignItems:"center",gap:5}}>{WFULL[i]}, {day.toLocaleDateString("pt-BR",{day:"numeric",month:"short"})}{isToday&&<span style={{fontSize:9,background:BLUE_LIGHT,color:BLUE,borderRadius:4,padding:"1px 5px"}}>HOJE</span>}</div>
-              {dt.map((t,i)=><Card key={t.id} t={t} i={i} S={S} compact onToggle={()=>toggleDone(t)} onEdit={()=>openEdit(t)} onDelete={()=>deleteTask(t.id)}/>)}
-            </div>);})}
-        </>}
-
-        {/* ── MÊS ── */}
-        {view==="mes"&&<>
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
-            <div style={S.section}>Panorama Mensal</div>
-            <div style={{display:"flex",alignItems:"center",gap:5}}>
-              <button onClick={()=>setMesOffset(o=>o-1)} style={{background:"#fff",border:`1px solid ${BORDER}`,borderRadius:6,padding:"5px 12px",cursor:"pointer",fontSize:14,color:TEXT}}>‹</button>
-              <span style={{fontWeight:700,fontSize:12,color:BLUE,minWidth:110,textAlign:"center"}}>{mesNome} {mesAno}</span>
-              <button onClick={()=>setMesOffset(o=>o+1)} style={{background:"#fff",border:`1px solid ${BORDER}`,borderRadius:6,padding:"5px 12px",cursor:"pointer",fontSize:14,color:TEXT}}>›</button>
-              {mesOffset!==0&&<button onClick={()=>setMesOffset(0)} style={{background:BLUE_LIGHT,border:`1px solid ${BLUE}`,borderRadius:6,padding:"5px 8px",cursor:"pointer",fontSize:10,color:BLUE,fontWeight:600}}>Hoje</button>}
-            </div>
-          </div>
-          <div style={{background:"#fff",border:`1px solid ${BORDER}`,borderRadius:10,padding:10,marginBottom:14}}>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:4}}>{WDAYS.map(d=><div key={d} style={{textAlign:"center",fontSize:9,fontWeight:600,color:TEXT2,padding:"2px 0"}}>{d}</div>)}</div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}}>
-              {Array.from({length:offsetInicio},(_,i)=><div key={"e"+i}/>)}
-              {mesDias.map(d=>{const ds=mesDateStr(d);const dt=mesTasksFor(ds);const isToday=ds===todayStr;const isPast=ds<todayStr;const temUrg=dt.some(t=>t.priority==="urgente");const temAlta=dt.some(t=>t.priority==="alta");
-                return(<div key={d} style={{minHeight:44,border:`1px solid ${isToday?BLUE:BORDER}`,borderRadius:5,padding:"3px 4px",background:isToday?BLUE_LIGHT:isPast?"#FAFAFA":"#fff",position:"relative"}}>
-                  <div style={{fontSize:10,fontWeight:isToday?700:400,color:isToday?BLUE:isPast?"#C5CAD8":TEXT}}>{d}</div>
-                  {dt.slice(0,2).map(t=><div key={t.id} style={{fontSize:7,background:CATEGORIES[t.category]?.bg||BLUE_LIGHT,color:CATEGORIES[t.category]?.color||BLUE,borderRadius:2,padding:"1px 2px",marginTop:1,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{t.title}</div>)}
-                  {dt.length>2&&<div style={{fontSize:7,color:TEXT2}}>+{dt.length-2}</div>}
-                  {temUrg&&<div style={{position:"absolute",top:2,right:2,width:5,height:5,borderRadius:"50%",background:RED}}/>}
-                  {!temUrg&&temAlta&&<div style={{position:"absolute",top:2,right:2,width:5,height:5,borderRadius:"50%",background:"#E65100"}}/>}
-                </div>);})}
-            </div>
-          </div>
-          {mesDias.map(d=>{const ds=mesDateStr(d);const dt=mesTasksFor(ds);if(!dt.length)return null;const isToday=ds===todayStr;
-            return(<div key={d} style={{marginBottom:10}}>
-              <div style={{fontSize:10.5,fontWeight:700,color:isToday?BLUE:TEXT2,marginBottom:5,display:"flex",alignItems:"center",gap:5}}>{WFULL[new Date(ds+"T12:00:00").getDay()===0?6:new Date(ds+"T12:00:00").getDay()-1]}, {ptDate(ds)}{isToday&&<span style={{fontSize:8.5,background:BLUE_LIGHT,color:BLUE,borderRadius:4,padding:"1px 5px"}}>HOJE</span>}</div>
-              {dt.map((t,i)=><Card key={t.id} t={t} i={i} S={S} compact onToggle={()=>toggleDone(t)} onEdit={()=>openEdit(t)} onDelete={()=>deleteTask(t.id)}/>)}
-            </div>);})}
-          {!mesDias.some(d=>mesTasksFor(mesDateStr(d)).length>0)&&<Empty icon="📅" msg={`Nenhuma tarefa em ${mesNome}.`}/>}
-        </>}
-
-        {/* ── CLIENTES ── */}
-        {view==="clientes"&&<>
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,gap:8,flexWrap:"wrap"}}>
-            <div style={S.section}>Painel por Cliente</div>
-            <select value={filterClient} onChange={e=>setFilterClient(e.target.value)} style={{...S.inp,width:"auto",padding:"8px 10px",fontSize:13}}>
-              <option value="all">Todos os clientes</option>
-              {allClients.map(c=><option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
-          {Object.keys(clientPanel).length===0&&<Empty icon="👥" msg="Nenhuma tarefa pendente."/>}
-          {Object.entries(clientPanel).sort((a,b)=>b[1].length-a[1].length).map(([client,ctasks])=>{
-            const temUrg=ctasks.some(t=>t.priority==="urgente");const temAtras=ctasks.some(t=>t.due<todayStr);
-            return(<div key={client} style={{background:"#fff",border:`1.5px solid ${temUrg||temAtras?RED:BORDER}`,borderRadius:10,padding:"12px 14px",marginBottom:10}}>
-              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
-                <div style={{display:"flex",alignItems:"center",gap:8}}>
-                  <div style={{width:32,height:32,borderRadius:"50%",background:BLUE_LIGHT,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:700,color:BLUE}}>{client.charAt(0).toUpperCase()}</div>
-                  <div><div style={{fontWeight:700,fontSize:13,color:TEXT}}>{client}</div><div style={{fontSize:10,color:TEXT2}}>{ctasks.length} pendente{ctasks.length!==1?"s":""}</div></div>
-                </div>
-                <div style={{display:"flex",gap:5}}>
-                  {temAtras&&<span style={{fontSize:9.5,background:RED_LIGHT,color:RED,borderRadius:5,padding:"2px 6px",fontWeight:600}}>⚠️ Atraso</span>}
-                  {temUrg&&<span style={{fontSize:9.5,background:RED_LIGHT,color:RED,borderRadius:5,padding:"2px 6px",fontWeight:600}}>🔴 Urgente</span>}
-                </div>
-              </div>
-              {ctasks.map((t,i)=><Card key={t.id} t={t} i={i} S={S} compact onToggle={()=>toggleDone(t)} onEdit={()=>openEdit(t)} onDelete={()=>deleteTask(t.id)}/>)}
-            </div>);})}
-        </>}
-
-        {/* ── TAREFAS ── */}
-        {view==="tarefas"&&<>
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,flexWrap:"wrap",gap:8}}>
-            <div style={S.section}>Todas as Tarefas</div>
-            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-              <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} style={{...S.inp,width:"auto",padding:"7px 9px",fontSize:12}}>
-                <option value="all">Todas categorias</option>
-                {Object.entries(CATEGORIES).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}
-              </select>
-              <select value={filterPri} onChange={e=>setFilterPri(e.target.value)} style={{...S.inp,width:"auto",padding:"7px 9px",fontSize:12}}>
-                <option value="all">Todas prioridades</option>
-                {Object.entries(PRIORITIES).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
-              </select>
-            </div>
-          </div>
-          {allFiltered.length===0?<Empty icon="🔍" msg="Nenhuma tarefa encontrada."/>:allFiltered.map((t,i)=><Card key={t.id} t={t} i={i} S={S} showDates onToggle={()=>toggleDone(t)} onEdit={()=>openEdit(t)} onDelete={()=>deleteTask(t.id)}/>)}
-          {done.length>0&&(
-            <div style={{marginTop:16}}>
-              <div style={{fontSize:11,fontWeight:600,color:TEXT2,textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:6,cursor:"pointer",display:"flex",alignItems:"center",gap:5}} onClick={()=>setShowDone(v=>!v)}>✅ Concluídas ({done.length}) {showDone?"▲":"▼"}</div>
-              {showDone&&done.map(t=>(
-                <div key={t.id} style={{background:"#fff",border:`1px solid ${BORDER}`,borderRadius:9,padding:"9px 12px",display:"flex",alignItems:"center",gap:8,marginBottom:5,opacity:.55}}>
-                  <span onClick={()=>toggleDone(t)} style={S.doneDot}>✓</span>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:12,textDecoration:"line-through",color:TEXT2}}>{t.title}</div>
-                    <div style={{fontSize:10,color:"#B0B8CC",marginTop:2}}>{t.client&&<span style={{marginRight:8}}>👤 {t.client}</span>}<span>Entrada: {ptDate(t.created_at)}</span>{t.completed_at&&<span style={{marginLeft:8}}>✅ {ptDate(t.completed_at)}</span>}</div>
-                  </div>
-                  <span onClick={()=>deleteTask(t.id)} style={{cursor:"pointer",color:"#C5CAD8",fontSize:13}}>✕</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </>}
-
-        {/* ── MAPA ── */}
-        {view==="mapa"&&<>
-          <div style={S.section}>Mapa de Prazos</div>
-          <div style={S.sub}>Visão geral por categoria</div>
-          {Object.entries(CATEGORIES).map(([k,v])=>{const cat=pending.filter(t=>t.category===k).sort((a,b)=>scoreTask(b)-scoreTask(a));if(!cat.length)return null;
-            return(<div key={k} style={{background:"#fff",borderLeft:`4px solid ${v.color}`,border:`1px solid ${v.color}33`,borderRadius:9,padding:"11px 14px",marginBottom:10}}>
-              <div style={{fontSize:12,fontWeight:700,color:v.color,marginBottom:7}}>{v.icon} {v.label} <span style={{fontWeight:400,color:TEXT2,fontSize:10.5}}>({cat.length})</span></div>
-              {cat.map(t=>{const st=statusInfo(t);const pri=PRIORITIES[t.priority];
-                return(<div key={t.id} style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",marginBottom:6,paddingBottom:6,borderBottom:`1px solid ${BORDER}`}}>
-                  <span style={{fontSize:10,fontWeight:700,color:pri.color,minWidth:50}}>{pri.dot} {pri.label}</span>
-                  <span style={{fontSize:12,color:TEXT,flex:1,minWidth:90}}>{t.title}</span>
-                  {t.client&&<span style={{fontSize:10,color:TEXT2}}>👤 {t.client}</span>}
-                  <span style={{fontSize:10,background:st.bg,color:st.color,borderRadius:5,padding:"2px 6px",fontWeight:600}}>{st.label}</span>
-                  <span style={{fontSize:10,color:TEXT2}}>{ptDate(t.due)}</span>
-                </div>);})}
-            </div>);})}
-          {pending.length===0&&<Empty icon="🎯" msg="Sem tarefas pendentes." sub="Você está em dia!"/>}
-        </>}
-
-
-        {/* ── PLANEJAMENTO ── */}
-        {view==="planejamento"&&<CentralPlanejamento supabase={supabase} tasks={tasks} pending={pending}/>}
-
-        {/* ── DASHBOARD ── */}
+                {/* ── DASHBOARD ── */}
         {view==="dashboard"&&<DashboardView fechaMap={fechaMap} fechaLoading={fechaLoading} onRefresh={fetchFechamento} getCell={getCell}/>}
 
                 {/* ── FECHAMENTO ── */}
@@ -762,34 +752,251 @@ export default function App(){
   );
 }
 
+
+// ═══════════════════════════════════════════════════════════
+// COMPONENTE: AGENDA INTELIGENTE
+// ═══════════════════════════════════════════════════════════
+function AgendaInteligente({tasks,pending,done,todayTasks,urgentesTab,comunsTab,weekDays,weekStart,weekTasksFor,mesDias,mesDateStr,mesTasksFor,mesNome,mesAno,mesOffset,setMesOffset,offsetInicio,todayStr,onToggle,onEdit,onDelete,S,in2days}){
+  const [subView,setSubView]=useState("dia");
+  const [agendaTab,setAgendaTab]=useState("urgentes");
+
+  const NM="#0F2040",NML="#E8EDF5",RD="#C41E3A",RDL="#FCEEF1",OW="#F8F7F4",OW2="#FFFFFF",BD="#E2E6EE",TX="#0F2040",TX2="#6B7A99",TX3="#A0AABF";
+
+  // Gerar agenda inteligente do dia
+  const agendaDia = useMemo(()=>montarAgendaDia(tasks),[tasks]);
+  const resumo = useMemo(()=>gerarResumoIA(tasks,agendaDia),[tasks,agendaDia]);
+
+  const today=new Date();today.setHours(0,0,0,0);
+  const weekDaysAll = Array.from({length:7},(_,i)=>addDays(weekStart,i));
+  const WDAYS_SHORT=["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"];
+  const WFULL_PT=["Segunda","Terça","Quarta","Quinta","Sexta","Sábado","Domingo"];
+
+  function SubBtn({id,label}){
+    const active=subView===id;
+    return(
+      <button onClick={()=>setSubView(id)} style={{background:active?OW2:"transparent",color:active?NM:TX2,border:"none",borderRadius:8,padding:"7px 18px",fontSize:12.5,fontFamily:"inherit",fontWeight:active?700:400,cursor:"pointer",transition:"all .15s",boxShadow:active?"0 1px 4px rgba(15,32,64,.1)":"none"}}>
+        {label}
+      </button>
+    );
+  }
+
+  return(
+    <div>
+      {/* SUB-NAV */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18,flexWrap:"wrap",gap:8}}>
+        <div>
+          <div style={{fontWeight:800,fontSize:22,color:TX,letterSpacing:"-0.5px"}}>
+            {subView==="dia"?"Agenda de Hoje":subView==="semana"?"Agenda da Semana":"Panorama Mensal"}
+          </div>
+          <div style={{fontSize:12,color:TX2,marginTop:2}}>
+            {subView==="dia"&&today.toLocaleDateString("pt-BR",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}
+            {subView==="semana"&&`${weekDays[0]?.toLocaleDateString("pt-BR",{day:"numeric",month:"short"})} – ${addDays(weekDays[0]||today,6).toLocaleDateString("pt-BR",{day:"numeric",month:"short",year:"numeric"})}`}
+            {subView==="mes"&&`${mesNome} ${mesAno}`}
+          </div>
+        </div>
+        <div style={{background:"#F0F2F7",borderRadius:10,padding:"4px",display:"flex",gap:2}}>
+          <SubBtn id="dia" label="📅 Dia"/>
+          <SubBtn id="semana" label="🗓 Semana"/>
+          <SubBtn id="mes" label="📆 Mês"/>
+        </div>
+      </div>
+
+      {/* ── VISÃO DIA ── */}
+      {subView==="dia"&&<>
+        {/* Painel IA */}
+        <div style={{background:NM,borderRadius:16,padding:"20px 22px",marginBottom:20,color:"#fff",display:"flex",gap:16,flexWrap:"wrap",alignItems:"center"}}>
+          <div style={{flex:1,minWidth:200}}>
+            <div style={{fontSize:17,fontWeight:700,marginBottom:4}}>{resumo.saudacao}</div>
+            <div style={{fontSize:12,opacity:0.75,marginBottom:10}}>
+              {resumo.totalHoje} tarefa{resumo.totalHoje!==1?"s":""} distribuída{resumo.totalHoje!==1?"s":""} automaticamente na agenda
+            </div>
+            {resumo.alertas.length>0&&<div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              {resumo.alertas.map((a,i)=>(
+                <span key={i} style={{background:"rgba(196,30,58,0.3)",color:"#FFB3C0",borderRadius:6,padding:"3px 9px",fontSize:11,fontWeight:600}}>⚠️ {a}</span>
+              ))}
+            </div>}
+          </div>
+          <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+            <div style={{textAlign:"center"}}>
+              <div style={{fontSize:28,fontWeight:800,letterSpacing:"-1px"}}>{resumo.carga}%</div>
+              <div style={{fontSize:10,opacity:0.6,marginTop:2}}>Ocupação</div>
+            </div>
+            <div style={{textAlign:"center"}}>
+              <div style={{fontSize:28,fontWeight:800,letterSpacing:"-1px",color:RD==="#C41E3A"?"#FF8FA3":"#FF8FA3"}}>{urgentesTab.length}</div>
+              <div style={{fontSize:10,opacity:0.6,marginTop:2}}>Urgentes</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Agenda montada pela IA */}
+        <div style={{marginBottom:20}}>
+          <div style={{fontWeight:700,fontSize:14,color:TX,marginBottom:10,textTransform:"uppercase",letterSpacing:"0.5px",display:"flex",alignItems:"center",gap:8}}>
+            <span style={{width:3,height:16,background:RD,borderRadius:2,display:"inline-block"}}/>
+            Agenda Montada pela IA
+          </div>
+          <div style={{background:OW2,borderRadius:12,border:`1px solid ${BD}`,overflow:"hidden"}}>
+            {agendaDia.map((item,i)=>{
+              const cat=item.cat?CATEGORIES[item.cat]:null;
+              const corBorda=item.tipo==="ritual"?NM:item.tipo==="atendimento"?"#2E7D32":cat?.color||NM;
+              const bgItem=item.tipo==="ritual"?NML:item.tipo==="atendimento"?"#E8F5E9":cat?.bg||NML;
+              return(
+                <div key={i} style={{display:"flex",gap:0,borderBottom:i<agendaDia.length-1?`1px solid ${BD}`:"none"}}>
+                  <div style={{width:72,padding:"12px 10px 12px 14px",borderRight:`1px solid ${BD}`,flexShrink:0}}>
+                    <div style={{fontSize:12,fontWeight:700,color:TX}}>{item.hora}</div>
+                    <div style={{fontSize:10,color:TX3,marginTop:1}}>{item.horaFim}</div>
+                  </div>
+                  <div style={{flex:1,padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderLeft:`3px solid ${corBorda}`,background:i%2===0?"#FAFBFD":OW2}}>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:13,fontWeight:600,color:TX}}>{item.titulo}</div>
+                      <div style={{display:"flex",gap:6,marginTop:4,flexWrap:"wrap"}}>
+                        {item.tipo==="tarefa"&&cat&&<span style={{fontSize:9.5,background:cat.bg,color:cat.color,border:`1px solid ${cat.color}22`,borderRadius:5,padding:"1px 7px",fontWeight:600}}>{cat.icon} {cat.label}</span>}
+                        {item.cliente&&<span style={{fontSize:9.5,color:TX2}}>👤 {item.cliente}</span>}
+                        {item.obs&&<span style={{fontSize:9.5,color:TX3,fontStyle:"italic"}}>{item.obs}</span>}
+                      </div>
+                    </div>
+                    {item.tipo==="tarefa"&&<span style={{fontSize:9.5,background:NML,color:NM,borderRadius:5,padding:"2px 7px",fontWeight:600,flexShrink:0}}>
+                      {Math.round(toMin(item.horaFim)-toMin(item.hora))}min
+                    </span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Abas urgentes / comuns */}
+        <div style={{display:"flex",gap:0,marginBottom:14,background:OW2,borderRadius:12,border:`1px solid ${BD}`,overflow:"hidden"}}>
+          <button onClick={()=>setAgendaTab("urgentes")} style={{flex:1,background:agendaTab==="urgentes"?RD:OW2,color:agendaTab==="urgentes"?"#fff":TX2,border:"none",padding:"12px 0",fontSize:13,fontWeight:700,fontFamily:"inherit",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:7,transition:"all .15s"}}>
+            🔴 Urgentes
+            {urgentesTab.length>0&&<span style={{background:agendaTab==="urgentes"?"rgba(255,255,255,0.25)":RDL,color:agendaTab==="urgentes"?"#fff":RD,borderRadius:10,padding:"2px 8px",fontSize:11,fontWeight:700}}>{urgentesTab.length}</span>}
+          </button>
+          <div style={{width:1,background:BD}}/>
+          <button onClick={()=>setAgendaTab("comuns")} style={{flex:1,background:agendaTab==="comuns"?NM:OW2,color:agendaTab==="comuns"?"#fff":TX2,border:"none",padding:"12px 0",fontSize:13,fontWeight:700,fontFamily:"inherit",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:7,transition:"all .15s"}}>
+            📋 Tarefas do Dia
+            {comunsTab.length>0&&<span style={{background:agendaTab==="comuns"?"rgba(255,255,255,0.25)":NML,color:agendaTab==="comuns"?"#fff":NM,borderRadius:10,padding:"2px 8px",fontSize:11,fontWeight:700}}>{comunsTab.length}</span>}
+          </button>
+        </div>
+
+        {agendaTab==="urgentes"&&(urgentesTab.length===0
+          ?<Empty icon="✅" msg="Nenhuma tarefa urgente!" sub="Você está em dia com as prioridades."/>
+          :urgentesTab.map((t,i)=><Card key={t.id} t={t} i={i} S={S} onToggle={()=>onToggle(t)} onEdit={()=>onEdit(t)} onDelete={()=>onDelete(t.id)}/>)
+        )}
+        {agendaTab==="comuns"&&(comunsTab.length===0
+          ?<Empty icon="🎉" msg="Nenhuma tarefa comum para hoje!"/>
+          :comunsTab.map((t,i)=><Card key={t.id} t={t} i={i} S={S} onToggle={()=>onToggle(t)} onEdit={()=>onEdit(t)} onDelete={()=>onDelete(t.id)}/>)
+        )}
+      </>}
+
+      {/* ── VISÃO SEMANA ── */}
+      {subView==="semana"&&<>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:6,marginBottom:18}}>
+          {weekDaysAll.map((day,i)=>{
+            const ds=fmtDate(day); const dt=weekTasksFor(ds);
+            const isToday=ds===todayStr; const isPast=ds<todayStr;
+            return(
+              <div key={ds} style={{background:isToday?NML:OW2,border:`1.5px solid ${isToday?NM:BD}`,borderRadius:12,padding:"10px 8px",minHeight:110,boxShadow:isToday?"0 2px 8px rgba(15,32,64,.1)":"0 1px 3px rgba(15,32,64,.04)"}}>
+                <div style={{fontSize:9.5,color:isToday?NM:TX2,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.5px"}}>{WDAYS_SHORT[i]}</div>
+                <div style={{fontSize:18,fontWeight:800,color:isToday?NM:isPast?TX3:TX,letterSpacing:"-0.5px",marginTop:1}}>{day.getDate()}</div>
+                <div style={{display:"flex",flexDirection:"column",gap:3,marginTop:5}}>
+                  {dt.map(t=><div key={t.id} style={{background:CATEGORIES[t.category]?.bg||NML,color:CATEGORIES[t.category]?.color||NM,borderRadius:5,padding:"2px 5px",fontSize:9,lineHeight:1.4,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",fontWeight:500}}>{CATEGORIES[t.category]?.icon} {t.title}</div>)}
+                  {dt.length===0&&<div style={{fontSize:10,color:TX3,textAlign:"center",marginTop:6}}>—</div>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {weekDaysAll.map((day,i)=>{
+          const ds=fmtDate(day); const dt=weekTasksFor(ds); if(!dt.length)return null;
+          const isToday=ds===todayStr;
+          return(
+            <div key={ds} style={{marginBottom:16}}>
+              <div style={{fontSize:11.5,fontWeight:700,color:isToday?NM:TX2,marginBottom:8,display:"flex",alignItems:"center",gap:8,textTransform:"uppercase",letterSpacing:"0.5px"}}>
+                <span style={{width:3,height:14,background:isToday?RD:BD,borderRadius:2,display:"inline-block"}}/>
+                {WFULL_PT[i]}, {day.toLocaleDateString("pt-BR",{day:"numeric",month:"short"})}
+                {isToday&&<span style={{fontSize:9.5,background:RD,color:"#fff",borderRadius:5,padding:"2px 7px",fontWeight:700}}>HOJE</span>}
+              </div>
+              {dt.map((t,j)=><Card key={t.id} t={t} i={j} S={S} compact onToggle={()=>onToggle(t)} onEdit={()=>onEdit(t)} onDelete={()=>onDelete(t.id)}/>)}
+            </div>
+          );
+        })}
+      </>}
+
+      {/* ── VISÃO MÊS ── */}
+      {subView==="mes"&&<>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14,justifyContent:"flex-end"}}>
+          <button onClick={()=>setMesOffset(o=>o-1)} style={{background:OW2,border:`1px solid ${BD}`,borderRadius:8,padding:"6px 14px",cursor:"pointer",fontSize:14,color:TX}}>‹</button>
+          <span style={{fontWeight:700,fontSize:13,color:NM,minWidth:120,textAlign:"center"}}>{mesNome} {mesAno}</span>
+          <button onClick={()=>setMesOffset(o=>o+1)} style={{background:OW2,border:`1px solid ${BD}`,borderRadius:8,padding:"6px 14px",cursor:"pointer",fontSize:14,color:TX}}>›</button>
+          {mesOffset!==0&&<button onClick={()=>setMesOffset(0)} style={{background:NML,border:`1px solid ${NM}`,borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:10.5,color:NM,fontWeight:700}}>Hoje</button>}
+        </div>
+        <div style={{background:OW2,border:`1px solid ${BD}`,borderRadius:14,padding:14,marginBottom:18,boxShadow:"0 1px 4px rgba(15,32,64,.04)"}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:6}}>
+            {["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"].map(d=><div key={d} style={{textAlign:"center",fontSize:10,fontWeight:600,color:TX2,padding:"3px 0"}}>{d}</div>)}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3}}>
+            {Array.from({length:offsetInicio},(_,i)=><div key={"e"+i}/>)}
+            {mesDias.map(d=>{
+              const ds=mesDateStr(d); const dt=mesTasksFor(ds);
+              const isToday=ds===todayStr; const isPast=ds<todayStr;
+              const temUrg=dt.some(t=>t.priority==="urgente"); const temAlta=dt.some(t=>t.priority==="alta");
+              return(
+                <div key={d} style={{minHeight:50,border:`1.5px solid ${isToday?NM:BD}`,borderRadius:8,padding:"4px 5px",background:isToday?NML:isPast?"#FAFBFD":OW2,position:"relative"}}>
+                  <div style={{fontSize:11,fontWeight:isToday?800:400,color:isToday?NM:isPast?TX3:TX}}>{d}</div>
+                  {dt.slice(0,2).map(t=><div key={t.id} style={{fontSize:7.5,background:CATEGORIES[t.category]?.bg||NML,color:CATEGORIES[t.category]?.color||NM,borderRadius:3,padding:"1px 3px",marginTop:1,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{t.title}</div>)}
+                  {dt.length>2&&<div style={{fontSize:7.5,color:TX3}}>+{dt.length-2}</div>}
+                  {temUrg&&<div style={{position:"absolute",top:3,right:3,width:6,height:6,borderRadius:"50%",background:RD}}/>}
+                  {!temUrg&&temAlta&&<div style={{position:"absolute",top:3,right:3,width:6,height:6,borderRadius:"50%",background:"#E65100"}}/>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        {mesDias.map(d=>{
+          const ds=mesDateStr(d); const dt=mesTasksFor(ds); if(!dt.length)return null;
+          const isToday=ds===todayStr;
+          return(
+            <div key={d} style={{marginBottom:12}}>
+              <div style={{fontSize:11,fontWeight:700,color:isToday?NM:TX2,marginBottom:6,display:"flex",alignItems:"center",gap:7,textTransform:"uppercase",letterSpacing:"0.5px"}}>
+                <span style={{width:3,height:12,background:isToday?RD:BD,borderRadius:2,display:"inline-block"}}/>
+                {WFULL_PT[new Date(ds+"T12:00:00").getDay()===0?6:new Date(ds+"T12:00:00").getDay()-1]}, {ptDate(ds)}
+                {isToday&&<span style={{fontSize:9,background:RD,color:"#fff",borderRadius:4,padding:"1px 6px",fontWeight:700}}>HOJE</span>}
+              </div>
+              {dt.map((t,j)=><Card key={t.id} t={t} i={j} S={S} compact onToggle={()=>onToggle(t)} onEdit={()=>onEdit(t)} onDelete={()=>onDelete(t.id)}/>)}
+            </div>
+          );
+        })}
+        {!mesDias.some(d=>mesTasksFor(mesDateStr(d)).length>0)&&<Empty icon="📅" msg={`Nenhuma tarefa em ${mesNome}.`}/>}
+      </>}
+    </div>
+  );
+}
+
+
 function Card({t,i,S,onToggle,onEdit,onDelete,compact,showDates}){
   const cat=CATEGORIES[t.category]||CATEGORIES.fiscal;
   const pri=PRIORITIES[t.priority]||PRIORITIES.media;
   const st=statusInfo(t);
   const isProx=diffDays(t.due)>0;
+  const NM="#0F2040",NML="#E8EDF5",RD="#C41E3A",RDL="#FCEEF1",BD="#E2E6EE",TX="#0F2040",TX2="#6B7A99";
   return(
-    <div className="tc" style={{...S.card,borderLeft:`4px solid ${cat.color}`,background:isProx&&(t.priority==="urgente"||t.priority==="alta")?"#FFFBF0":"#fff"}}>
-      <span onClick={onToggle} style={S.circle(cat.color)} title="Concluir"/>
+    <div className="tc" style={{background:"#FFFFFF",border:`1px solid ${BD}`,borderLeft:`3px solid ${cat.color}`,borderRadius:12,padding:compact?"10px 14px":"14px 16px",display:"flex",alignItems:"flex-start",gap:12,marginBottom:8,boxShadow:"0 1px 4px rgba(15,32,64,.04)",transition:"box-shadow .15s"}}>
+      <span onClick={onToggle} style={{width:24,height:24,borderRadius:"50%",border:`2px solid ${cat.color}22`,flexShrink:0,cursor:"pointer",marginTop:1,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:cat.color,background:cat.bg,transition:"transform .15s"}} title="Concluir"/>
       <div style={{flex:1,minWidth:0}}>
-        <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap",marginBottom:compact?0:4}}>
-          <span style={{fontSize:compact?12:13.5,fontWeight:600,color:TEXT,lineHeight:1.3}}>{t.title}</span>
+        <div style={{fontSize:compact?12.5:14,fontWeight:600,color:TX,lineHeight:1.3,marginBottom:5}}>{t.title}</div>
+        <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
+          <span style={{background:cat.bg,color:cat.color,border:`1px solid ${cat.color}22`,borderRadius:5,padding:"2px 7px",fontSize:9.5,fontWeight:600}}>{cat.icon} {cat.label}</span>
+          <span style={{background:pri.bg||"#F5F6FA",color:pri.color,borderRadius:5,padding:"2px 7px",fontSize:9.5,fontWeight:600}}>{pri.dot} {pri.label}</span>
+          {isProx&&(t.priority==="urgente"||t.priority==="alta")&&<span style={{background:RDL,color:RD,borderRadius:5,padding:"2px 7px",fontSize:9.5,fontWeight:600}}>⚡ próx.7d</span>}
+          {!compact&&t.client&&<span style={{fontSize:10,color:TX2}}>👤 {t.client}</span>}
+          {!compact&&showDates&&t.created_at&&<span style={{fontSize:10,color:TX2}}>📅 {ptDate(t.created_at)}</span>}
+          {!compact&&t.notes&&<span style={{fontSize:10,color:TX2,fontStyle:"italic"}}>📝 {t.notes}</span>}
         </div>
-        <div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:4}}>
-          <span style={S.badge(cat.color,cat.bg)}>{cat.icon} {cat.label}</span>
-          <span style={S.badge(pri.color,pri.bg)}>{pri.dot} {pri.label}</span>
-          {isProx&&(t.priority==="urgente"||t.priority==="alta")&&<span style={S.badge("#E65100","#FFF3E0")}>⚡ próx.7d</span>}
-        </div>
-        {!compact&&(t.client||t.notes||showDates)&&<div style={{fontSize:10.5,color:TEXT2,display:"flex",gap:10,flexWrap:"wrap",marginTop:5}}>
-          {t.client&&<span>👤 {t.client}</span>}
-          {t.notes&&<span>📝 {t.notes}</span>}
-          {showDates&&<span>📅 {ptDate(t.created_at)}</span>}
-        </div>}
       </div>
-      <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:5,flexShrink:0}}>
-        <span style={{fontSize:10,background:st.bg,color:st.color,borderRadius:5,padding:"3px 7px",fontWeight:600,whiteSpace:"nowrap"}}>{st.label}</span>
-        <div style={{display:"flex",gap:4}}>
-          <span onClick={onEdit} style={{cursor:"pointer",color:"#90A4AE",fontSize:14,padding:"2px 4px"}}>✏️</span>
-          <span onClick={onDelete} style={{cursor:"pointer",color:"#CFD8DC",fontSize:14,padding:"2px 4px"}}>✕</span>
+      <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6,flexShrink:0}}>
+        <span style={{fontSize:10,background:st.bg,color:st.color,borderRadius:6,padding:"3px 9px",fontWeight:700,whiteSpace:"nowrap"}}>{st.label}</span>
+        <div style={{display:"flex",gap:3}}>
+          <span onClick={onEdit} style={{cursor:"pointer",color:"#B0BAD0",fontSize:13,padding:"3px 5px",borderRadius:5}} title="Editar">✏️</span>
+          <span onClick={onDelete} style={{cursor:"pointer",color:"#D0D6E2",fontSize:13,padding:"3px 5px",borderRadius:5}} title="Excluir">✕</span>
         </div>
       </div>
     </div>
@@ -2330,9 +2537,10 @@ function DashboardView({fechaMap,fechaLoading,onRefresh,getCell}){
 
 
 function Empty({icon,msg,sub}){
-  return(<div style={{textAlign:"center",padding:"44px 0",color:"#B0B8CC"}}>
-    <div style={{fontSize:36,marginBottom:8}}>{icon}</div>
-    <div style={{fontWeight:600,fontSize:14,color:TEXT2}}>{msg}</div>
-    {sub&&<div style={{fontSize:12,marginTop:4}}>{sub}</div>}
+  const TX2="#6B7A99";
+  return(<div style={{textAlign:"center",padding:"52px 0",color:"#B0BACC"}}>
+    <div style={{fontSize:40,marginBottom:12}}>{icon}</div>
+    <div style={{fontWeight:700,fontSize:15,color:TX2,letterSpacing:"-0.2px"}}>{msg}</div>
+    {sub&&<div style={{fontSize:12.5,marginTop:5,color:"#A0AABF"}}>{sub}</div>}
   </div>);
 }
