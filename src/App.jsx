@@ -529,7 +529,8 @@ export default function App(){
   const allClients=useMemo(()=>[...new Set(tasks.map(t=>t.client).filter(Boolean))].sort(),[tasks]);
 
   // AGENDA: urgentes = vencidas + hoje + urgente/alta próx 7d | comuns = resto do dia
-  const allTodayPending=useMemo(()=>pending.filter(t=>t.due<=todayStr).sort((a,b)=>scoreTask(b)-scoreTask(a)),[tasks]);
+  const todayTasks=useMemo(()=>pending.filter(t=>t.due<=todayStr).sort((a,b)=>scoreTask(b)-scoreTask(a)),[tasks]);
+  const allTodayPending=todayTasks;
   const prox7Urgentes=useMemo(()=>pending.filter(t=>t.due>todayStr&&t.due<=in7days&&(t.priority==="urgente"||t.priority==="alta")).sort((a,b)=>scoreTask(b)-scoreTask(a)),[tasks]);
   const urgentesTab=useMemo(()=>{
     const base=allTodayPending.filter(t=>t.priority==="urgente"||t.priority==="alta"||t.due<todayStr);
