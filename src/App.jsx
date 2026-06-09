@@ -107,27 +107,27 @@ function montarAgendaDia(tasks){
     return[{hora:"08:00",horaFim:"17:00",titulo:"🏖️ Período de Férias — Agenda Bloqueada",tipo:"ferias",cor:"#C41E3A",obs:"13/07 a 24/07/2026"}];
   }
 
-  const in7=new Date(hoje); in7.setDate(hoje.getDate()+7);
-  const in7S=in7.toISOString().split("T")[0];
-
+  // TODAS as tarefas pendentes — sem filtro de data
   // Ordenação inteligente por prioridade de negócio
   const candidatas=[...tasks]
-    .filter(t=>!t.done&&t.due<=in7S)
+    .filter(t=>!t.done)
     .sort((a,b)=>{
-      // Admissões com documentação completa — prioridade máxima
-      const isAdmA=(a.tipo_atividade==="admissao"&&a.documentacao_completa)||(a.title||"").toLowerCase().includes("admiss")&&a.category==="dp";
-      const isAdmB=(b.tipo_atividade==="admissao"&&b.documentacao_completa)||(b.title||"").toLowerCase().includes("admiss")&&b.category==="dp";
-      if(isAdmA&&!isAdmB)return -1;
-      if(!isAdmA&&isAdmB)return 1;
-      // Atrasadas sobem
+      // Atrasadas sempre primeiro
       const aAtras=a.due<todayS; const bAtras=b.due<todayS;
       if(aAtras&&!bAtras)return -1;
       if(!aAtras&&bAtras)return 1;
+      // Admissões com documentação completa — prioridade máxima
+      const isAdmA=(a.tipo_atividade==="admissao"&&a.documentacao_completa)||(a.title||"").toLowerCase().includes("admiss");
+      const isAdmB=(b.tipo_atividade==="admissao"&&b.documentacao_completa)||(b.title||"").toLowerCase().includes("admiss");
+      if(isAdmA&&!isAdmB)return -1;
+      if(!isAdmA&&isAdmB)return 1;
       // Prioridade
       const ordemPri={urgente:0,alta:1,media:2,baixa:3};
       const pa=ordemPri[a.priority]||2; const pb=ordemPri[b.priority]||2;
       if(pa!==pb)return pa-pb;
-      return a.due<b.due?-1:1;
+      // Prazo mais próximo primeiro
+      if(a.due&&b.due)return a.due<b.due?-1:1;
+      return 0;
     });
 
   // Blocos fixos reservados
