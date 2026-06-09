@@ -385,7 +385,9 @@ function getRecorrentesDoMes(offsetMeses=0){
     });
   });
 
-  return tarefas;
+  // Filtrar apenas tarefas com due >= hoje (não criar no passado)
+  const hojeStr=new Date().toISOString().split("T")[0];
+  return tarefas.filter(t=>t.due>=hojeStr);
 }
 
 
@@ -531,11 +533,11 @@ export default function App(){
     const hoje=new Date().toISOString().split("T")[0];
 
     // Buscar TODAS as tarefas do mês atual para verificar duplicatas
-    const mesAtual=hoje.substring(0,7); // "2026-06"
+    // Buscar recorrentes existentes de hoje em diante
     const{data:exist}=await supabase.from("tasks")
       .select("recorrente_key,title,due")
-      .gte("due",mesAtual+"-01")
-      .lte("due",mesAtual+"-31");
+      .gte("due",hoje)
+      .not("recorrente_key","is",null);
 
     const keysExist=new Set((exist||[]).map(r=>r.recorrente_key).filter(Boolean));
     // Também verificar por título+dia para evitar duplicatas sem recorrente_key
@@ -649,9 +651,11 @@ export default function App(){
 
   async function toggleDone(t){
     const now=!t.done;const completed_at=now?todayStr:null;
-    await supabase.from("tasks").update({done:now,completed_at}).eq("id",t.id);
+    // Atualiza estado local IMEDIATAMENTE — some na hora da tela
     setTasks(prev=>prev.map(x=>x.id===t.id?{...x,done:now,completed_at}:x));
-    showToast(now?"Concluída! ✓":"Reaberta");
+    // Salva no banco em paralelo
+    await supabase.from("tasks").update({done:now,completed_at}).eq("id",t.id);
+    showToast(now?"✓ Concluída — removida da agenda":"↩ Reaberta");
   }
 
   async function deleteTask(id){await supabase.from("tasks").delete().eq("id",id);setTasks(prev=>prev.filter(x=>x.id!==id));showToast("Removida");}
@@ -688,8 +692,9 @@ export default function App(){
   const weekStart=getWeekStart(today);
   const weekDays=Array.from({length:7},(_,i)=>addDays(weekStart,i));
   const in7days=fmtDate(addDays(today,7));
-  const pending=tasks.filter(t=>!t.done);
-  const done=tasks.filter(t=>t.done);
+  // pending reage imediatamente a qualquer mudança em tasks
+  const pending=useMemo(()=>tasks.filter(t=>!t.done),[tasks]);
+  const done=useMemo(()=>tasks.filter(t=>t.done),[tasks]);
   const allClients=useMemo(()=>[...new Set(tasks.map(t=>t.client).filter(Boolean))].sort(),[tasks]);
 
   // AGENDA: urgentes = vencidas + hoje + urgente/alta próx 7d | comuns = resto do dia
@@ -1212,7 +1217,11 @@ function AgendaInteligente({tasks,pending,done,todayTasks,urgentesTab,comunsTab,
   const NM="#0F2040",NML="#E8EDF5",RD="#C41E3A",RDL="#FCEEF1",OW="#F8F7F4",OW2="#FFFFFF",BD="#E2E6EE",TX="#0F2040",TX2="#6B7A99",TX3="#A0AABF";
 
   // Gerar agenda inteligente do dia
-  const agendaDia = useMemo(()=>{ setAgendaLocal(null); return montarAgendaDia(tasks); },[tasks]);
+  // Agenda recalcula TODA VEZ que tasks muda (concluir = some na hora)
+  const agendaDia = useMemo(()=>{
+    setAgendaLocal(null); // reseta reordenação manual
+    return montarAgendaDia(tasks);
+  },[tasks]);
   const resumo = useMemo(()=>gerarResumoIA(tasks,agendaDia),[tasks,agendaDia]);
 
   const today=new Date();today.setHours(0,0,0,0);
@@ -1505,7 +1514,7 @@ function Card({t,i,S,onToggle,onEdit,onDelete,compact,showDates}){
   const NM="#0F2040",NML="#E8EDF5",RD="#C41E3A",RDL="#FCEEF1",BD="#E2E6EE",TX="#0F2040",TX2="#6B7A99";
   return(
     <div className="tc" style={{background:"#FFFFFF",border:`1px solid ${BD}`,borderLeft:`3px solid ${cat.color}`,borderRadius:12,padding:compact?"10px 14px":"14px 16px",display:"flex",alignItems:"flex-start",gap:12,marginBottom:8,boxShadow:"0 1px 4px rgba(15,32,64,.04)",transition:"box-shadow .15s"}}>
-      <span onClick={onToggle} style={{width:24,height:24,borderRadius:"50%",border:`2px solid ${cat.color}22`,flexShrink:0,cursor:"pointer",marginTop:1,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:cat.color,background:cat.bg,transition:"transform .15s"}} title="Concluir"/>
+      <span onClick={onToggle} style={{width:26,height:26,borderRadius:"50%",border:`2px solid ${cat.color}`,flexShrink:0,cursor:"pointer",marginTop:1,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,color:cat.color,background:"#fff",transition:"all .15s",boxShadow:`0 0 0 0px ${cat.color}`}} title="Marcar como concluída" onMouseEnter={e=>{e.currentTarget.style.background=cat.bg;e.currentTarget.style.transform="scale(1.1)";}} onMouseLeave={e=>{e.currentTarget.style.background="#fff";e.currentTarget.style.transform="scale(1)";}}>{""}</span>
       <div style={{flex:1,minWidth:0}}>
         <div style={{fontSize:compact?12.5:14,fontWeight:600,color:TX,lineHeight:1.3,marginBottom:5}}>{t.title}</div>
         <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
