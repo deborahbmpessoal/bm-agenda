@@ -277,8 +277,9 @@ const STATUS_OPERACIONAL = {
 
 // ── TAREFAS RECORRENTES FIXAS ──
 // Definição completa de todas as rotinas que devem existir mensalmente
-function getRecorrentesDoMes(){
+function getRecorrentesDoMes(offsetMeses=0){
   const hoje = new Date();
+  hoje.setMonth(hoje.getMonth()+offsetMeses);
   const ano  = hoje.getFullYear();
   const mes  = String(hoje.getMonth()+1).padStart(2,"0");
   const mesProx = hoje.getMonth()===11 ? "01" : String(hoje.getMonth()+2).padStart(2,"0");
@@ -448,7 +449,19 @@ const WDAYS=["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"];
 const WFULL=["Segunda","Terça","Quarta","Quinta","Sexta","Sábado","Domingo"];
 const MONTHS_PT=["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 function scoreTask(t){const d=diffDays(t.due);const p={urgente:100,alta:60,media:30,baixa:10}[t.priority]||0;const u=d<=0?200:d===1?150:d<=3?80:d<=7?40:10;return p+u;}
-function statusInfo(t){const d=diffDays(t.due);if(d<0)return{label:`${Math.abs(d)}d atraso`,color:RED,bg:RED_LIGHT};if(d===0)return{label:"Hoje",color:BLUE,bg:BLUE_LIGHT};if(d===1)return{label:"Amanhã",color:"#E65100",bg:"#FFF3E0"};return{label:`Em ${d}d`,color:TEXT2,bg:GRAY};}
+function statusInfo(t){
+  // Alerta de férias — tarefas no período 13/07–24/07/2026
+  if(t.due>="2026-07-13"&&t.due<="2026-07-24")
+    return{label:"⚠️ Férias",color:"#C41E3A",bg:"#FCEEF1",ferias:true};
+  // Tarefas logo antes das férias — antecipar
+  if(t.due>="2026-07-08"&&t.due<="2026-07-12")
+    return{label:"⚡ Antes das férias",color:"#E65100",bg:"#FFF3E0",antesFerias:true};
+  const d=diffDays(t.due);
+  if(d<0)return{label:`${Math.abs(d)}d atraso`,color:"#C41E3A",bg:"#FCEEF1"};
+  if(d===0)return{label:"Hoje",color:"#0F2040",bg:"#E8EDF5"};
+  if(d===1)return{label:"Amanhã",color:"#E65100",bg:"#FFF3E0"};
+  return{label:`Em ${d}d`,color:"#6B7A99",bg:"#F8F7F4"};
+}
 
 export default function App(){
   const [tasks,setTasks]=useState([]);
@@ -497,7 +510,8 @@ export default function App(){
   }
 
   async function criarRecorrentesDoMes(){
-    const recorrentes=getRecorrentesDoMes();
+    // Criar recorrentes do mês atual E do próximo mês
+    const recorrentes=[...getRecorrentesDoMes(0),...getRecorrentesDoMes(1)];
     const hoje=new Date().toISOString().split("T")[0];
 
     // Buscar TODAS as tarefas do mês atual para verificar duplicatas
@@ -1222,6 +1236,32 @@ function AgendaInteligente({tasks,pending,done,todayTasks,urgentesTab,comunsTab,
 
       {/* ── VISÃO DIA ── */}
       {subView==="dia"&&<>
+        {/* Banner férias — aparece quando estiver próximo */}
+        {(()=>{
+          const hoje=new Date(); const todayS=hoje.toISOString().split("T")[0];
+          const diasParaFerias=Math.ceil((new Date("2026-07-13")-hoje)/86400000);
+          if(diasParaFerias>0&&diasParaFerias<=30){
+            return(
+              <div style={{background:"linear-gradient(135deg,#C41E3A,#8B0000)",borderRadius:12,padding:"14px 18px",marginBottom:14,color:"#fff",display:"flex",alignItems:"center",gap:12}}>
+                <span style={{fontSize:24}}>🏖️</span>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:700,fontSize:14}}>Férias em {diasParaFerias} dia{diasParaFerias!==1?"s":""}! (13/07 a 24/07/2026)</div>
+                  <div style={{fontSize:12,opacity:0.85,marginTop:2}}>
+                    {tasks.filter(t=>!t.done&&t.due>="2026-07-13"&&t.due<="2026-07-24").length} tarefa{tasks.filter(t=>!t.done&&t.due>="2026-07-13"&&t.due<="2026-07-24").length!==1?"s":""} no período precisam de atenção
+                  </div>
+                </div>
+                {tasks.filter(t=>!t.done&&t.due>="2026-07-08"&&t.due<="2026-07-12").length>0&&(
+                  <div style={{textAlign:"right",flexShrink:0}}>
+                    <div style={{fontSize:11,opacity:0.85}}>Antecipar:</div>
+                    <div style={{fontWeight:700,fontSize:16}}>{tasks.filter(t=>!t.done&&t.due>="2026-07-08"&&t.due<="2026-07-12").length} tarefa{tasks.filter(t=>!t.done&&t.due>="2026-07-08"&&t.due<="2026-07-12").length!==1?"s":""}</div>
+                  </div>
+                )}
+              </div>
+            );
+          }
+          return null;
+        })()}
+
         {/* Painel IA */}
         <div style={{background:NM,borderRadius:16,padding:"20px 22px",marginBottom:20,color:"#fff",display:"flex",gap:16,flexWrap:"wrap",alignItems:"center"}}>
           <div style={{flex:1,minWidth:200}}>
@@ -1460,7 +1500,11 @@ function Card({t,i,S,onToggle,onEdit,onDelete,compact,showDates}){
         </div>
       </div>
       <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6,flexShrink:0}}>
-        <span style={{fontSize:10,background:st.bg,color:st.color,borderRadius:6,padding:"3px 9px",fontWeight:700,whiteSpace:"nowrap"}}>{st.label}</span>
+        <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:3}}>
+          <span style={{fontSize:10,background:st.bg,color:st.color,borderRadius:6,padding:"3px 9px",fontWeight:700,whiteSpace:"nowrap",border:st.ferias?"1.5px solid #C41E3A":st.antesFerias?"1.5px solid #E65100":"none"}}>{st.label}</span>
+          {st.ferias&&<span style={{fontSize:9,color:"#C41E3A",fontWeight:600}}>Avisar equipe</span>}
+          {st.antesFerias&&<span style={{fontSize:9,color:"#E65100",fontWeight:600}}>Antecipar</span>}
+        </div>
         <div style={{display:"flex",gap:3}}>
           <span onClick={onEdit} style={{cursor:"pointer",color:"#B0BAD0",fontSize:13,padding:"3px 5px",borderRadius:5}} title="Editar">✏️</span>
           <span onClick={onDelete} style={{cursor:"pointer",color:"#D0D6E2",fontSize:13,padding:"3px 5px",borderRadius:5}} title="Excluir">✕</span>
