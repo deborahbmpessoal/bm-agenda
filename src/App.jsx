@@ -107,32 +107,45 @@ function montarAgendaDia(tasks){
     return[{hora:"08:00",horaFim:"17:00",titulo:"🏖️ Período de Férias — Agenda Bloqueada",tipo:"ferias",cor:"#C41E3A",obs:"13/07 a 24/07/2026"}];
   }
 
-  // TODAS as tarefas pendentes — sem filtro de data
-  // Deduplicar por título+dia (evitar múltiplas postagens no mesmo dia)
+  // ── HORA ATUAL (estilo Google Agenda) ──
+  const agora=new Date();
+  const horaAgoraMin=agora.getHours()*60+agora.getMinutes();
+  const ehHoje=todayS===agora.toISOString().split("T")[0];
+
+  // Calcular primeiro slot disponível
+  let primeiroSlot="08:15";
+  if(ehHoje){
+    const proximoMin=Math.ceil((horaAgoraMin+5)/15)*15;
+    if(proximoMin>=toMin("17:00")){
+      primeiroSlot="FIM";
+    } else if(proximoMin>=toMin("12:00")&&proximoMin<toMin("14:00")){
+      primeiroSlot="14:00";
+    } else {
+      primeiroSlot=addMin("00:00",proximoMin);
+    }
+  }
+
+  // Deduplicar tarefas por título+dia
   const vistosHoje=new Set();
   const candidatas=[...tasks]
     .filter(t=>{
       if(t.done)return false;
+      if(t.permite_agendamento===false)return false;
+      if(t.status_operacional==="aguardando_info"||t.status_operacional==="aguardando_cliente")return false;
       const chave=`${t.title}|${t.due}`;
       if(vistosHoje.has(chave))return false;
       vistosHoje.add(chave);
       return true;
     })
     .sort((a,b)=>{
-      // Atrasadas sempre primeiro
       const aAtras=a.due<todayS; const bAtras=b.due<todayS;
-      if(aAtras&&!bAtras)return -1;
-      if(!aAtras&&bAtras)return 1;
-      // Admissões com documentação completa — prioridade máxima
+      if(aAtras&&!bAtras)return -1; if(!aAtras&&bAtras)return 1;
       const isAdmA=(a.tipo_atividade==="admissao"&&a.documentacao_completa)||(a.title||"").toLowerCase().includes("admiss");
       const isAdmB=(b.tipo_atividade==="admissao"&&b.documentacao_completa)||(b.title||"").toLowerCase().includes("admiss");
-      if(isAdmA&&!isAdmB)return -1;
-      if(!isAdmA&&isAdmB)return 1;
-      // Prioridade
+      if(isAdmA&&!isAdmB)return -1; if(!isAdmA&&isAdmB)return 1;
       const ordemPri={urgente:0,alta:1,media:2,baixa:3};
       const pa=ordemPri[a.priority]||2; const pb=ordemPri[b.priority]||2;
       if(pa!==pb)return pa-pb;
-      // Prazo mais próximo primeiro
       if(a.due&&b.due)return a.due<b.due?-1:1;
       return 0;
     });
@@ -146,57 +159,34 @@ function montarAgendaDia(tasks){
     {inicio:"15:30",fim:"16:00",tipo:"atendimento"},
     {inicio:"16:45",fim:"17:00",tipo:"checkout"},
   ];
-
-  // Marketing Seg/Qua/Sex — 10:20 às 10:30
-  if(isDiaMarketing()){
-    agendados.push({inicio:"10:20",fim:"10:30",tipo:"marketing"});
-  }
+  if(isDiaMarketing()) agendados.push({inicio:"10:20",fim:"10:30",tipo:"marketing"});
 
   const agenda=[];
-  // Check-in — só adicionar se ainda não passou
+
+  // Dia encerrado
+  if(primeiroSlot==="FIM"){
+    agenda.push({hora:"16:45",horaFim:"17:00",titulo:"🔍 Check-out Diário",tipo:"ritual",cor:"#0F2040",obs:"Revisar entregas · Pendências · Planejar amanhã"});
+    return agenda;
+  }
+
+  // Check-in — só se ainda não passou
   if(!ehHoje||toMin("08:00")>=horaAgoraMin){
     agenda.push({hora:"08:00",horaFim:"08:15",titulo:"✅ Check-in Diário",tipo:"ritual",cor:"#0F2040",obs:"Revisar agenda · Prioridades · Urgências · Planejar o dia"});
   }
+
   // Marketing — só se ainda não passou
   if(isDiaMarketing()&&(!ehHoje||toMin("10:20")>horaAgoraMin)){
     agenda.push({hora:"10:20",horaFim:"10:30",titulo:"📣 Postagem Instagram",tipo:"marketing",cor:"#AD1457",obs:"Publicação de conteúdo — 10 minutos"});
   }
 
-  // ── HORA ATUAL (estilo Google Agenda) ──
-  const agora=new Date();
-  const horaAgoraMin=agora.getHours()*60+agora.getMinutes();
-  const ehHoje=todayS===agora.toISOString().split("T")[0];
-
-  let primeiroSlot="08:15";
-  if(ehHoje){
-    // Próximo slot de 15min após hora atual + 5min buffer
-    const proximoMin=Math.ceil((horaAgoraMin+5)/15)*15;
-    if(proximoMin>=toMin("17:00")){
-      // Dia encerrado — retornar só check-out
-      const ag=[];
-      ag.push({hora:"16:45",horaFim:"17:00",titulo:"🔍 Check-out Diário",tipo:"ritual",cor:"#0F2040",obs:"Revisar entregas · Pendências · Planejar amanhã"});
-      return ag;
-    } else if(proximoMin>=toMin("12:00")&&proximoMin<toMin("14:00")){
-      primeiroSlot="14:00";
-    } else {
-      primeiroSlot=addMin("00:00",proximoMin);
-    }
-  }
-
+  // Distribuir tarefas nos slots disponíveis
   let horaAtual=primeiroSlot;
   let tarefasInseridas=0;
 
   for(const t of candidatas){
-    // Usar tempo_estimado do tipo_atividade se disponível
     const tipoInfo=TIPOS_ATIVIDADE[t.tipo_atividade];
     const duracao=t.tempo_estimado||tipoInfo?.tempo||TEMPO_POR_CATEGORIA[t.category]||60;
-    // Só pular se EXPLICITAMENTE marcado false — null/undefined = pode agendar
-    if(t.permite_agendamento===false)continue;
-    // Só pular se status operacional estiver explicitamente bloqueado
-    if(t.status_operacional==="aguardando_info"||t.status_operacional==="aguardando_cliente")continue;
-    // Não mostrar tarefas já concluídas
-    if(t.done)continue;
-    // Avançar sobre blocos fixos
+    // Avançar sobre blocos fixos e almoço
     let tentativas=0;
     while(tentativas<15){
       tentativas++;
@@ -222,20 +212,15 @@ function montarAgendaDia(tasks){
     if(tarefasInseridas>=10)break;
   }
 
-  // Blocos de atendimento — só mostrar futuros se for hoje
+  // Blocos de atendimento — só futuros se for hoje
   BLOCOS_ATENDIMENTO.forEach(b=>{
-    if(ehHoje&&toMin(b.fim)<=horaAgoraMin) return; // já passou
+    if(ehHoje&&toMin(b.fim)<=horaAgoraMin)return;
     agenda.push({hora:b.inicio,horaFim:b.fim,titulo:"👥 Atendimento Clientes",tipo:"atendimento",cor:"#2E7D32",obs:"Reservado — ligações, reuniões, retornos, suporte"});
   });
 
   // Check-out — só se ainda não passou
   if(!ehHoje||toMin("16:45")>horaAgoraMin){
     agenda.push({hora:"16:45",horaFim:"17:00",titulo:"🔍 Check-out Diário",tipo:"ritual",cor:"#0F2040",obs:"Revisar entregas · Pendências · Planejar amanhã"});
-  }
-
-  // Check-in — só se ainda não passou
-  if(!ehHoje||toMin("08:00")>horaAgoraMin){
-    agenda.push({hora:"08:00",horaFim:"08:15",titulo:"✅ Check-in Diário",tipo:"ritual",cor:"#0F2040",obs:"Revisar agenda · Prioridades · Urgências · Planejar o dia"});
   }
 
   return agenda.sort((a,b)=>toMin(a.hora)-toMin(b.hora));
