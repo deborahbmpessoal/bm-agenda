@@ -153,14 +153,37 @@ function montarAgendaDia(tasks){
   }
 
   const agenda=[];
-  // Check-in sempre primeiro
-  agenda.push({hora:"08:00",horaFim:"08:15",titulo:"✅ Check-in Diário",tipo:"ritual",cor:"#0F2040",obs:"Revisar agenda · Prioridades · Urgências · Planejar o dia"});
-  // Marketing
-  if(isDiaMarketing()){
+  // Check-in — só adicionar se ainda não passou
+  if(!ehHoje||toMin("08:00")>=horaAgoraMin){
+    agenda.push({hora:"08:00",horaFim:"08:15",titulo:"✅ Check-in Diário",tipo:"ritual",cor:"#0F2040",obs:"Revisar agenda · Prioridades · Urgências · Planejar o dia"});
+  }
+  // Marketing — só se ainda não passou
+  if(isDiaMarketing()&&(!ehHoje||toMin("10:20")>horaAgoraMin)){
     agenda.push({hora:"10:20",horaFim:"10:30",titulo:"📣 Postagem Instagram",tipo:"marketing",cor:"#AD1457",obs:"Publicação de conteúdo — 10 minutos"});
   }
 
-  let horaAtual="08:15";
+  // ── HORA ATUAL (estilo Google Agenda) ──
+  const agora=new Date();
+  const horaAgoraMin=agora.getHours()*60+agora.getMinutes();
+  const ehHoje=todayS===agora.toISOString().split("T")[0];
+
+  let primeiroSlot="08:15";
+  if(ehHoje){
+    // Próximo slot de 15min após hora atual + 5min buffer
+    const proximoMin=Math.ceil((horaAgoraMin+5)/15)*15;
+    if(proximoMin>=toMin("17:00")){
+      // Dia encerrado — retornar só check-out
+      const ag=[];
+      ag.push({hora:"16:45",horaFim:"17:00",titulo:"🔍 Check-out Diário",tipo:"ritual",cor:"#0F2040",obs:"Revisar entregas · Pendências · Planejar amanhã"});
+      return ag;
+    } else if(proximoMin>=toMin("12:00")&&proximoMin<toMin("14:00")){
+      primeiroSlot="14:00";
+    } else {
+      primeiroSlot=addMin("00:00",proximoMin);
+    }
+  }
+
+  let horaAtual=primeiroSlot;
   let tarefasInseridas=0;
 
   for(const t of candidatas){
@@ -199,13 +222,21 @@ function montarAgendaDia(tasks){
     if(tarefasInseridas>=10)break;
   }
 
-  // Blocos de atendimento
+  // Blocos de atendimento — só mostrar futuros se for hoje
   BLOCOS_ATENDIMENTO.forEach(b=>{
+    if(ehHoje&&toMin(b.fim)<=horaAgoraMin) return; // já passou
     agenda.push({hora:b.inicio,horaFim:b.fim,titulo:"👥 Atendimento Clientes",tipo:"atendimento",cor:"#2E7D32",obs:"Reservado — ligações, reuniões, retornos, suporte"});
   });
 
-  // Check-out
-  agenda.push({hora:"16:45",horaFim:"17:00",titulo:"🔍 Check-out Diário",tipo:"ritual",cor:"#0F2040",obs:"Revisar entregas · Pendências · Planejar amanhã"});
+  // Check-out — só se ainda não passou
+  if(!ehHoje||toMin("16:45")>horaAgoraMin){
+    agenda.push({hora:"16:45",horaFim:"17:00",titulo:"🔍 Check-out Diário",tipo:"ritual",cor:"#0F2040",obs:"Revisar entregas · Pendências · Planejar amanhã"});
+  }
+
+  // Check-in — só se ainda não passou
+  if(!ehHoje||toMin("08:00")>horaAgoraMin){
+    agenda.push({hora:"08:00",horaFim:"08:15",titulo:"✅ Check-in Diário",tipo:"ritual",cor:"#0F2040",obs:"Revisar agenda · Prioridades · Urgências · Planejar o dia"});
+  }
 
   return agenda.sort((a,b)=>toMin(a.hora)-toMin(b.hora));
 }
@@ -1289,9 +1320,14 @@ function AgendaInteligente({tasks,pending,done,todayTasks,urgentesTab,comunsTab,
 
         {/* Agenda montada pela IA */}
         <div style={{marginBottom:20}}>
-          <div style={{fontWeight:700,fontSize:14,color:TX,marginBottom:10,textTransform:"uppercase",letterSpacing:"0.5px",display:"flex",alignItems:"center",gap:8}}>
-            <span style={{width:3,height:16,background:RD,borderRadius:2,display:"inline-block"}}/>
-            Agenda Montada pela IA
+          <div style={{fontWeight:700,fontSize:14,color:TX,marginBottom:10,textTransform:"uppercase",letterSpacing:"0.5px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <span style={{width:3,height:16,background:RD,borderRadius:2,display:"inline-block"}}/>
+              Agenda Montada pela IA
+            </div>
+            <span style={{fontSize:11,background:NML,color:NM,borderRadius:6,padding:"3px 10px",fontWeight:600}}>
+              🕐 {new Date().toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})}
+            </span>
           </div>
           <div style={{background:OW2,borderRadius:12,border:`1px solid ${BD}`,overflow:"hidden"}}
             onDragOver={e=>e.preventDefault()}
