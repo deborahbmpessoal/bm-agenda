@@ -85,6 +85,7 @@ const NAV_ITEMS=[
   {id:"mes",icon:"📆",label:"Mês"},
   {id:"clientes",icon:"👥",label:"Clientes"},
   {id:"tarefas",icon:"📋",label:"Tarefas"},
+  {id:"planejamento",icon:"🗂",label:"Planejar"},
   {id:"dashboard",icon:"📈",label:"Dashboard"},
   {id:"fechamento",icon:"📁",label:"Fechamento"},
 ];
@@ -538,6 +539,9 @@ export default function App(){
         </>}
 
 
+        {/* ── PLANEJAMENTO ── */}
+        {view==="planejamento"&&<PlanejamentoView supabase={supabase}/>}
+
         {/* ── DASHBOARD ── */}
         {view==="dashboard"&&<DashboardView fechaMap={fechaMap} fechaLoading={fechaLoading} onRefresh={fetchFechamento} getCell={getCell}/>}
 
@@ -793,6 +797,551 @@ function Card({t,i,S,onToggle,onEdit,onDelete,compact,showDates}){
     </div>
   );
 }
+
+// ─────────────────────────────────────────────────────────────
+// MÓDULO: PLANEJAMENTO SEMANAL
+// Inserir este bloco ANTES da função Empty no App.jsx
+// ─────────────────────────────────────────────────────────────
+
+const PL_CATS = {
+  estrategico: { label:"Estratégico", color:"#7B1FA2", bg:"#F3E5F5", icon:"🎯",
+    subs:["Planejamento","Metas","Reunião de Sócios"] },
+  tatico:      { label:"Tático",      color:"#1565C0", bg:"#E3F0FF", icon:"⚙️",
+    subs:["Reunião de Equipe","Gestão de Processos","Alinhamentos"] },
+  operacional: { label:"Operacional", color:"#C62828", bg:"#FFEBEE", icon:"🔧",
+    subs:["Folha de Pagamento","Rescisões","Admissões","Execução de Tarefas"] },
+  comercial:   { label:"Comercial",   color:"#E65100", bg:"#FFF3E0", icon:"🤝",
+    subs:["Reunião com Cliente","Prospecção","Follow-up"] },
+  desenvolvimento:{ label:"Desenvolvimento", color:"#2E7D32", bg:"#E8F5E9", icon:"📚",
+    subs:["Estudos","Cursos","Leitura Técnica","Inovação"] },
+};
+
+const PL_PRIS = {
+  alta:  { label:"Alta",  color:"#C62828", dot:"🔴" },
+  media: { label:"Média", color:"#E65100", dot:"🟡" },
+  baixa: { label:"Baixa", color:"#2E7D32", dot:"🟢" },
+};
+
+const PL_URG = {
+  urgente:      { label:"Urgente",       color:"#C62828", bg:"#FFEBEE" },
+  esta_semana:  { label:"Esta Semana",   color:"#1565C0", bg:"#E3F0FF" },
+  planejada:    { label:"Planejada",     color:"#5A6580", bg:"#F5F6FA" },
+};
+
+const TEMPO_PADRAO = {
+  "Atendimento ao Cliente":30, "Reunião com Cliente":60, "Cliente Estratégico":60,
+  "Cliente Operacional":30, "Cliente Novo":60, "Alinhamento Rápido":15,
+  "Admissões":30, "Rescisões":60, "Folha de Pagamento":120,
+  "Auditoria Trabalhista":120, "Planejamento":60, "Estudos":90,
+  "Cursos":90, "Execução de Tarefas":60, "Reunião de Equipe":60,
+  "Gestão de Processos":60, "Metas":60, "Reunião de Sócios":60,
+  "Resposta Rápida":15, "Follow-up":30,
+};
+
+const DIAS_SEMANA = ["Segunda","Terça","Quarta","Quinta","Sexta"];
+const HORAS_MANHA = ["08:00","08:15","08:30","08:45","09:00","09:15","09:30","09:45","10:00","10:15","10:30","10:45","11:00","11:15","11:30","11:45","12:00"];
+const HORAS_TARDE = ["14:00","14:15","14:30","14:45","15:00","15:15","15:30","15:45","16:00","16:15","16:30","16:45","17:00"];
+const TODAS_HORAS = [...HORAS_MANHA.slice(0,-1), ...HORAS_TARDE];
+
+function getWeekDates(weekOffset=0){
+  const now = new Date();
+  const day = now.getDay();
+  const diff = now.getDate() - day + (day===0?-6:1) + weekOffset*7;
+  return Array.from({length:5},(_,i)=>{ const d=new Date(now); d.setDate(diff+i); return d; });
+}
+
+function fmtDatePl(d){ return d.toISOString().split("T")[0]; }
+function timeToMin(t){ const[h,m]=t.split(":").map(Number); return h*60+m; }
+function minToTime(m){ return `${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`; }
+function addMinutes(t,m){ return minToTime(timeToMin(t)+m); }
+
+const RITUAIS_BASE = [
+  { titulo:"✅ Check-in Diário", categoria:"tatico", subcategoria:"Alinhamentos",
+    prioridade:"alta", urgencia:"urgente", hora_inicio:"08:00", hora_fim:"08:15",
+    tempo_previsto:15, observacoes:"Revisão da agenda · Prioridades do dia · Demandas urgentes", ritual:true, cor:"#1565C0" },
+  { titulo:"🔍 Check-out Diário", categoria:"tatico", subcategoria:"Alinhamentos",
+    prioridade:"alta", urgencia:"urgente", hora_inicio:"16:45", hora_fim:"17:00",
+    tempo_previsto:15, observacoes:"Revisão das entregas · Pendências · Planejamento amanhã", ritual:true, cor:"#1565C0" },
+  { titulo:"🎯 Foco Profundo — Manhã", categoria:"operacional", subcategoria:"Execução de Tarefas",
+    prioridade:"alta", urgencia:"esta_semana", hora_inicio:"10:00", hora_fim:"12:00",
+    tempo_previsto:120, observacoes:"Produção · Folha · Rescisões · Demandas técnicas", ritual:true, cor:"#C62828" },
+  { titulo:"🎯 Foco Profundo — Tarde", categoria:"operacional", subcategoria:"Execução de Tarefas",
+    prioridade:"alta", urgencia:"esta_semana", hora_inicio:"15:00", hora_fim:"16:30",
+    tempo_previsto:90, observacoes:"Produção · Auditorias · Demandas técnicas", ritual:true, cor:"#C62828" },
+  { titulo:"👥 Atendimento a Clientes", categoria:"comercial", subcategoria:"Reunião com Cliente",
+    prioridade:"media", urgencia:"esta_semana", hora_inicio:"09:00", hora_fim:"10:00",
+    tempo_previsto:60, observacoes:"Ligações · Reuniões · Retornos · Suporte", ritual:true, cor:"#E65100" },
+  { titulo:"👥 Atendimento a Clientes", categoria:"comercial", subcategoria:"Reunião com Cliente",
+    prioridade:"media", urgencia:"esta_semana", hora_inicio:"14:00", hora_fim:"15:00",
+    tempo_previsto:60, observacoes:"Ligações · Reuniões · Retornos · Suporte", ritual:true, cor:"#E65100" },
+];
+
+function PlanejamentoView({ supabase }){
+  const [blocos,setBlocos] = useState([]);
+  const [loadingPl,setLoadingPl] = useState(true);
+  const [weekOffset,setWeekOffset] = useState(0);
+  const [viewMode,setViewMode] = useState("semanal"); // semanal | diario
+  const [diaIdx,setDiaIdx] = useState(0);
+  const [showFormPl,setShowFormPl] = useState(false);
+  const [editBloco,setEditBloco] = useState(null);
+  const [dragId,setDragId] = useState(null);
+  const [toastPl,setToastPl] = useState(null);
+  const [rituaisOk,setRituaisOk] = useState(false);
+
+  const weekDates = getWeekDates(weekOffset);
+  const weekLabel = `${weekDates[0].toLocaleDateString("pt-BR",{day:"numeric",month:"short"})} – ${weekDates[4].toLocaleDateString("pt-BR",{day:"numeric",month:"short",year:"numeric"})}`;
+
+  const emptyBloco = {
+    titulo:"", categoria:"operacional", subcategoria:"", prioridade:"media",
+    urgencia:"esta_semana", data:fmtDatePl(weekDates[diaIdx]||weekDates[0]),
+    hora_inicio:"09:00", hora_fim:"10:00", tempo_previsto:60,
+    tempo_realizado:0, observacoes:"", recorrencia:"nenhuma", concluido:false, ritual:false, cor:""
+  };
+  const [formPl,setFormPl] = useState(emptyBloco);
+
+  useEffect(()=>{ fetchBlocos(); },[weekOffset]);
+
+  async function fetchBlocos(){
+    setLoadingPl(true);
+    const startDate = fmtDatePl(weekDates[0]);
+    const endDate   = fmtDatePl(weekDates[4]);
+    const{data}=await supabase.from("planejamento").select("*")
+      .gte("data",startDate).lte("data",endDate).order("hora_inicio");
+    setBlocos(data||[]);
+    setLoadingPl(false);
+  }
+
+  async function criarRituais(){
+    if(rituaisOk) return;
+    const startDate = fmtDatePl(weekDates[0]);
+    const{data:exist}=await supabase.from("planejamento").select("id")
+      .eq("ritual",true).gte("data",startDate).lte("data",fmtDatePl(weekDates[4]));
+    if(exist&&exist.length>0){ setRituaisOk(true); return; }
+    const inserts=[];
+    weekDates.forEach(d=>{
+      RITUAIS_BASE.forEach(r=>{
+        inserts.push({...r, data:fmtDatePl(d), recorrencia:"diaria", tempo_realizado:0, concluido:false});
+      });
+    });
+    await supabase.from("planejamento").insert(inserts);
+    setRituaisOk(true);
+    await fetchBlocos();
+    showToastPl("✅ Rituais da semana criados!");
+  }
+
+  useEffect(()=>{ if(!loadingPl) criarRituais(); },[loadingPl]);
+
+  function showToastPl(msg,type="ok"){ setToastPl({msg,type}); setTimeout(()=>setToastPl(null),3000); }
+
+  async function saveBloco(){
+    if(!formPl.titulo.trim()) return;
+    const payload={...formPl};
+    if(!payload.cor) payload.cor = PL_CATS[payload.categoria]?.color||"#1565C0";
+    if(editBloco){
+      await supabase.from("planejamento").update(payload).eq("id",editBloco);
+      showToastPl("Bloco atualizado!");
+    } else {
+      if(formPl.recorrencia!=="nenhuma"){
+        const inserts=[];
+        const dias = formPl.recorrencia==="diaria"?5:formPl.recorrencia==="semanal"?1:1;
+        weekDates.slice(0,dias).forEach(d=>{
+          inserts.push({...payload, data:fmtDatePl(d)});
+        });
+        await supabase.from("planejamento").insert(inserts);
+        showToastPl(`${inserts.length} blocos criados!`);
+      } else {
+        await supabase.from("planejamento").insert([payload]);
+        showToastPl("Bloco criado!");
+      }
+    }
+    setShowFormPl(false); setEditBloco(null); setFormPl(emptyBloco);
+    fetchBlocos();
+  }
+
+  async function deleteBloco(id){
+    await supabase.from("planejamento").delete().eq("id",id);
+    setBlocos(prev=>prev.filter(b=>b.id!==id));
+    showToastPl("Removido");
+  }
+
+  async function toggleConcluido(bloco){
+    const v=!bloco.concluido;
+    await supabase.from("planejamento").update({concluido:v}).eq("id",bloco.id);
+    setBlocos(prev=>prev.map(b=>b.id===bloco.id?{...b,concluido:v}:b));
+  }
+
+  async function duplicarBloco(bloco){
+    const{id,...rest}=bloco;
+    await supabase.from("planejamento").insert([{...rest,concluido:false,titulo:rest.titulo+" (cópia)"}]);
+    fetchBlocos(); showToastPl("Bloco duplicado!");
+  }
+
+  async function moverBloco(bloco,novoDia){
+    const novaData=fmtDatePl(weekDates[novoDia]);
+    await supabase.from("planejamento").update({data:novaData}).eq("id",bloco.id);
+    setBlocos(prev=>prev.map(b=>b.id===bloco.id?{...b,data:novaData}:b));
+    showToastPl(`Movido para ${DIAS_SEMANA[novoDia]}!`);
+  }
+
+  function openEdit(b){
+    setFormPl({titulo:b.titulo,categoria:b.categoria,subcategoria:b.subcategoria||"",
+      prioridade:b.prioridade,urgencia:b.urgencia,data:b.data,
+      hora_inicio:b.hora_inicio,hora_fim:b.hora_fim,tempo_previsto:b.tempo_previsto||60,
+      tempo_realizado:b.tempo_realizado||0,observacoes:b.observacoes||"",
+      recorrencia:"nenhuma",concluido:b.concluido,ritual:b.ritual,cor:b.cor||""});
+    setEditBloco(b.id); setShowFormPl(true);
+  }
+
+  // Indicadores
+  const totalMin = blocos.reduce((s,b)=>s+(b.tempo_previsto||0),0);
+  const realizadoMin = blocos.filter(b=>b.concluido).reduce((s,b)=>s+(b.tempo_previsto||0),0);
+  const pendentes = blocos.filter(b=>!b.concluido&&!b.ritual).length;
+  const concluidos = blocos.filter(b=>b.concluido).length;
+  const disponivel = 5*(4*60+3*60) - totalMin; // 5 dias * (4h manhã + 3h tarde) em min
+  const ocupacao = Math.min(100,Math.round((totalMin/Math.max(1,5*7*60))*100));
+
+  // Blocos do dia
+  function blocosNoDia(dateStr){
+    return blocos.filter(b=>b.data===dateStr).sort((a,b)=>timeToMin(a.hora_inicio)-timeToMin(b.hora_inicio));
+  }
+
+  // Calcular altura e top na grade (1px = 1min, base 8h=0)
+  function calcTop(h){ const m=timeToMin(h); return m<720?(m-480):(m-840+240); }
+  function calcHeight(hi,hf){ return Math.max(timeToMin(hf)-timeToMin(hi),15); }
+
+  const SLOT_H=15; // px por 15min
+  const MANHA_H=(4*60/15)*SLOT_H; // 240px para manhã (4h)
+  const TARDE_H=(3*60/15)*SLOT_H; // 180px para tarde (3h)
+
+  const C="#1565C0",CL="#E3F0FF",BD="#DDE3F0",TX="#1A2340",TX2="#5A6580",GR="#F5F6FA";
+
+  const inputStyle={width:"100%",background:GR,border:`1px solid ${BD}`,borderRadius:8,padding:"9px 11px",color:TX,fontSize:13,fontFamily:"inherit"};
+  const lblStyle={fontSize:10,color:TX2,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:"0.5px",fontWeight:600};
+
+  function BlocoCard({b,compact}){
+    const cat=PL_CATS[b.categoria]||PL_CATS.operacional;
+    const pri=PL_PRIS[b.prioridade]||PL_PRIS.media;
+    const urg=PL_URG[b.urgencia]||PL_URG.esta_semana;
+    const cor=b.cor||cat.color;
+    return(
+      <div
+        draggable={true}
+        onDragStart={()=>setDragId(b.id)}
+        onDragEnd={()=>setDragId(null)}
+        style={{background:b.concluido?"#F5F5F5":cat.bg,border:`1.5px solid ${cor}`,borderLeft:`4px solid ${cor}`,borderRadius:8,padding:compact?"5px 7px":"9px 11px",marginBottom:5,opacity:b.concluido?0.6:1,cursor:"grab",transition:"box-shadow .15s"}}
+      >
+        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:5}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:compact?11:12.5,fontWeight:700,color:b.concluido?"#999":TX,textDecoration:b.concluido?"line-through":"none",lineHeight:1.3}}>{b.titulo}</div>
+            {!compact&&<div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:4}}>
+              <span style={{fontSize:9,background:cat.bg,color:cat.color,border:`1px solid ${cat.color}44`,borderRadius:4,padding:"1px 5px",fontWeight:600}}>{cat.icon} {cat.label}</span>
+              <span style={{fontSize:9,background:urg.bg,color:urg.color,borderRadius:4,padding:"1px 5px",fontWeight:600}}>{urg.label}</span>
+              <span style={{fontSize:9,color:pri.color,fontWeight:700}}>{pri.dot}</span>
+            </div>}
+            <div style={{fontSize:10,color:TX2,marginTop:3}}>{b.hora_inicio}–{b.hora_fim} · {b.tempo_previsto}min</div>
+          </div>
+          <div style={{display:"flex",gap:3,flexShrink:0}}>
+            <span onClick={()=>toggleConcluido(b)} style={{cursor:"pointer",fontSize:13}} title={b.concluido?"Reabrir":"Concluir"}>{b.concluido?"↩":"✓"}</span>
+            <span onClick={()=>openEdit(b)} style={{cursor:"pointer",fontSize:11,color:"#90A4AE"}}>✏️</span>
+            <span onClick={()=>duplicarBloco(b)} style={{cursor:"pointer",fontSize:11,color:"#90A4AE"}} title="Duplicar">⧉</span>
+            <span onClick={()=>deleteBloco(b.id)} style={{cursor:"pointer",fontSize:11,color:"#CFD8DC"}}>✕</span>
+          </div>
+        </div>
+        {/* Botões de mover (mobile) */}
+        {!compact&&<div style={{display:"flex",gap:4,marginTop:5,flexWrap:"wrap"}}>
+          {DIAS_SEMANA.map((d,i)=>{
+            const ds=fmtDatePl(weekDates[i]);
+            if(ds===b.data) return null;
+            return<button key={i} onClick={()=>moverBloco(b,i)} style={{fontSize:9,background:"#fff",border:`1px solid ${BD}`,borderRadius:4,padding:"2px 6px",cursor:"pointer",color:TX2}}>→ {d.slice(0,3)}</button>;
+          })}
+        </div>}
+      </div>
+    );
+  }
+
+  return(
+    <div>
+      {toastPl&&<div style={{position:"fixed",bottom:80,right:16,zIndex:999,background:toastPl.type==="err"?"#C62828":"#1565C0",color:"#fff",borderRadius:10,padding:"10px 16px",fontSize:12.5,fontWeight:600,boxShadow:"0 4px 16px rgba(0,0,0,.2)"}}>{toastPl.msg}</div>}
+
+      {/* HEADER */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,flexWrap:"wrap",gap:8}}>
+        <div style={{fontWeight:700,fontSize:18,color:TX}}>🗂 Planejamento Semanal</div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+          <div style={{display:"flex",gap:0,background:"#fff",borderRadius:8,border:`1px solid ${BD}`,overflow:"hidden"}}>
+            <button onClick={()=>setViewMode("semanal")} style={{background:viewMode==="semanal"?C:"#fff",color:viewMode==="semanal"?"#fff":TX2,border:"none",padding:"6px 12px",fontSize:11.5,fontFamily:"inherit",fontWeight:500,cursor:"pointer"}}>📅 Semanal</button>
+            <button onClick={()=>setViewMode("diario")} style={{background:viewMode==="diario"?C:"#fff",color:viewMode==="diario"?"#fff":TX2,border:"none",padding:"6px 12px",fontSize:11.5,fontFamily:"inherit",fontWeight:500,cursor:"pointer"}}>📋 Diário</button>
+          </div>
+          <button onClick={()=>setWeekOffset(o=>o-1)} style={{background:"#fff",border:`1px solid ${BD}`,borderRadius:7,padding:"6px 10px",cursor:"pointer",fontSize:13,color:TX}}>‹</button>
+          <span style={{fontSize:11.5,fontWeight:600,color:C,minWidth:180,textAlign:"center"}}>{weekLabel}</span>
+          <button onClick={()=>setWeekOffset(o=>o+1)} style={{background:"#fff",border:`1px solid ${BD}`,borderRadius:7,padding:"6px 10px",cursor:"pointer",fontSize:13,color:TX}}>›</button>
+          {weekOffset!==0&&<button onClick={()=>setWeekOffset(0)} style={{background:CL,border:`1px solid ${C}`,borderRadius:7,padding:"6px 8px",cursor:"pointer",fontSize:10,color:C,fontWeight:600}}>Hoje</button>}
+          <button onClick={()=>{setEditBloco(null);setFormPl({...emptyBloco,data:fmtDatePl(weekDates[diaIdx]||weekDates[0])});setShowFormPl(true);}} style={{background:"#C62828",color:"#fff",border:"none",borderRadius:7,padding:"7px 14px",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>+ Bloco</button>
+        </div>
+      </div>
+
+      {/* INDICADORES */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:8,marginBottom:14}}>
+        {[
+          {l:"Planejadas",v:`${Math.floor(totalMin/60)}h${totalMin%60>0?totalMin%60+"m":""}`,c:C,bg:CL},
+          {l:"Executadas",v:`${Math.floor(realizadoMin/60)}h${realizadoMin%60>0?realizadoMin%60+"m":""}`,c:"#2E7D32",bg:"#E8F5E9"},
+          {l:"Disponível",v:`${Math.max(0,Math.floor(disponivel/60))}h`,c:TX2,bg:GR},
+          {l:"Ocupação",v:`${ocupacao}%`,c:ocupacao>80?"#C62828":ocupacao>50?"#E65100":C,bg:ocupacao>80?"#FFEBEE":ocupacao>50?"#FFF3E0":CL},
+          {l:"Pendentes",v:pendentes,c:"#C62828",bg:"#FFEBEE"},
+        ].map(s=>(
+          <div key={s.l} style={{background:s.bg,border:`1px solid ${s.c}33`,borderRadius:10,padding:"9px 10px"}}>
+            <div style={{fontSize:18,fontWeight:700,color:s.c,lineHeight:1}}>{s.v}</div>
+            <div style={{fontSize:9.5,color:s.c,marginTop:2,fontWeight:500}}>{s.l}</div>
+          </div>
+        ))}
+      </div>
+
+      {loadingPl&&<div style={{textAlign:"center",padding:"30px",color:TX2}}>Carregando...</div>}
+
+      {/* VISÃO SEMANAL */}
+      {!loadingPl&&viewMode==="semanal"&&(
+        <div style={{background:"#fff",border:`1px solid ${BD}`,borderRadius:12,overflow:"auto",WebkitOverflowScrolling:"touch"}}>
+          {/* Cabeçalho dias */}
+          <div style={{display:"grid",gridTemplateColumns:"56px repeat(5,1fr)",borderBottom:`1.5px solid ${BD}`}}>
+            <div style={{padding:"8px 6px",fontSize:9,fontWeight:600,color:TX2,textAlign:"center"}}>Hora</div>
+            {weekDates.map((d,i)=>{
+              const isHoje=fmtDatePl(d)===fmtDatePl(new Date());
+              return(
+                <div key={i} onClick={()=>{setDiaIdx(i);setViewMode("diario");}} style={{padding:"8px 6px",textAlign:"center",cursor:"pointer",background:isHoje?CL:"#fff",borderLeft:`1px solid ${BD}`}}>
+                  <div style={{fontSize:9.5,color:isHoje?C:TX2,fontWeight:600,textTransform:"uppercase"}}>{DIAS_SEMANA[i]}</div>
+                  <div style={{fontSize:16,fontWeight:700,color:isHoje?C:TX}}>{d.getDate()}</div>
+                  <div style={{fontSize:9,color:TX2}}>{blocosNoDia(fmtDatePl(d)).length} blocos</div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Grade manhã */}
+          <div style={{padding:"4px 0 2px 0",background:"#FAFBFF",borderBottom:`1.5px dashed ${BD}`}}>
+            <div style={{paddingLeft:6,fontSize:9,fontWeight:600,color:"#1565C0",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:2}}>☀️ Manhã · 08h–12h</div>
+            <div style={{display:"grid",gridTemplateColumns:"56px repeat(5,1fr)",minHeight:MANHA_H}}>
+              {/* Horários */}
+              <div style={{position:"relative"}}>
+                {HORAS_MANHA.slice(0,-1).filter((_,i)=>i%2===0).map(h=>(
+                  <div key={h} style={{position:"absolute",top:(timeToMin(h)-480)/60*SLOT_H*4,left:0,right:0,fontSize:8.5,color:TX2,paddingLeft:4,lineHeight:1}}>{h}</div>
+                ))}
+              </div>
+              {weekDates.map((d,di)=>{
+                const ds=fmtDatePl(d);
+                const dayBlocos=blocosNoDia(ds).filter(b=>timeToMin(b.hora_inicio)<720);
+                return(
+                  <div key={di} onDragOver={e=>e.preventDefault()} onDrop={async()=>{
+                    if(dragId){await moverBloco(blocos.find(b=>b.id===dragId),di);setDragId(null);}
+                  }} style={{position:"relative",minHeight:MANHA_H,borderLeft:`1px solid ${BD}`}}>
+                    {HORAS_MANHA.slice(0,-1).map(h=>(
+                      <div key={h} style={{position:"absolute",top:(timeToMin(h)-480)/60*SLOT_H*4,left:0,right:0,height:SLOT_H,borderTop:`1px solid ${h.endsWith("00")?"#DDE3F0":"#F0F3FA"}`}}/>
+                    ))}
+                    {dayBlocos.map(b=>{
+                      const top=(timeToMin(b.hora_inicio)-480)/60*SLOT_H*4;
+                      const height=Math.max((timeToMin(b.hora_fim)-timeToMin(b.hora_inicio))/60*SLOT_H*4,22);
+                      const cat=PL_CATS[b.categoria]||PL_CATS.operacional;
+                      const cor=b.cor||cat.color;
+                      return(
+                        <div key={b.id} draggable onDragStart={()=>setDragId(b.id)} onDragEnd={()=>setDragId(null)} onClick={()=>openEdit(b)}
+                          style={{position:"absolute",top,left:2,right:2,height,background:b.concluido?"#F5F5F5":cat.bg,border:`1.5px solid ${cor}`,borderLeft:`3px solid ${cor}`,borderRadius:5,padding:"2px 4px",overflow:"hidden",cursor:"grab",zIndex:1,opacity:b.concluido?0.6:1}}>
+                          <div style={{fontSize:9.5,fontWeight:700,color:cor,lineHeight:1.2,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{b.titulo}</div>
+                          <div style={{fontSize:8.5,color:TX2}}>{b.hora_inicio}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Grade tarde */}
+          <div style={{padding:"4px 0 2px 0",background:"#FFFBF0"}}>
+            <div style={{paddingLeft:6,fontSize:9,fontWeight:600,color:"#E65100",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:2}}>🌤 Tarde · 14h–17h</div>
+            <div style={{display:"grid",gridTemplateColumns:"56px repeat(5,1fr)",minHeight:TARDE_H}}>
+              <div style={{position:"relative"}}>
+                {HORAS_TARDE.slice(0,-1).filter((_,i)=>i%2===0).map(h=>(
+                  <div key={h} style={{position:"absolute",top:(timeToMin(h)-840)/60*SLOT_H*4,left:0,right:0,fontSize:8.5,color:TX2,paddingLeft:4,lineHeight:1}}>{h}</div>
+                ))}
+              </div>
+              {weekDates.map((d,di)=>{
+                const ds=fmtDatePl(d);
+                const dayBlocos=blocosNoDia(ds).filter(b=>timeToMin(b.hora_inicio)>=840);
+                return(
+                  <div key={di} onDragOver={e=>e.preventDefault()} onDrop={async()=>{
+                    if(dragId){await moverBloco(blocos.find(b=>b.id===dragId),di);setDragId(null);}
+                  }} style={{position:"relative",minHeight:TARDE_H,borderLeft:`1px solid ${BD}`}}>
+                    {HORAS_TARDE.slice(0,-1).map(h=>(
+                      <div key={h} style={{position:"absolute",top:(timeToMin(h)-840)/60*SLOT_H*4,left:0,right:0,height:SLOT_H,borderTop:`1px solid ${h.endsWith("00")?"#DDE3F0":"#F0F3FA"}`}}/>
+                    ))}
+                    {dayBlocos.map(b=>{
+                      const top=(timeToMin(b.hora_inicio)-840)/60*SLOT_H*4;
+                      const height=Math.max((timeToMin(b.hora_fim)-timeToMin(b.hora_inicio))/60*SLOT_H*4,22);
+                      const cat=PL_CATS[b.categoria]||PL_CATS.operacional;
+                      const cor=b.cor||cat.color;
+                      return(
+                        <div key={b.id} draggable onDragStart={()=>setDragId(b.id)} onDragEnd={()=>setDragId(null)} onClick={()=>openEdit(b)}
+                          style={{position:"absolute",top,left:2,right:2,height,background:b.concluido?"#F5F5F5":cat.bg,border:`1.5px solid ${cor}`,borderLeft:`3px solid ${cor}`,borderRadius:5,padding:"2px 4px",overflow:"hidden",cursor:"grab",zIndex:1,opacity:b.concluido?0.6:1}}>
+                          <div style={{fontSize:9.5,fontWeight:700,color:cor,lineHeight:1.2,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{b.titulo}</div>
+                          <div style={{fontSize:8.5,color:TX2}}>{b.hora_inicio}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* VISÃO DIÁRIA */}
+      {!loadingPl&&viewMode==="diario"&&(
+        <div>
+          {/* Seletor de dia */}
+          <div style={{display:"flex",gap:5,marginBottom:14,overflowX:"auto"}}>
+            {weekDates.map((d,i)=>{
+              const isHoje=fmtDatePl(d)===fmtDatePl(new Date());
+              return(
+                <button key={i} onClick={()=>setDiaIdx(i)} style={{background:diaIdx===i?"#1565C0":isHoje?"#E3F0FF":"#fff",color:diaIdx===i?"#fff":isHoje?"#1565C0":"#5A6580",border:`1px solid ${diaIdx===i?"#1565C0":isHoje?"#1565C0":"#DDE3F0"}`,borderRadius:8,padding:"7px 14px",fontSize:12,fontFamily:"inherit",fontWeight:diaIdx===i?700:400,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>
+                  {DIAS_SEMANA[i]} {d.getDate()}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Grade do dia selecionado */}
+          <div style={{background:"#fff",border:`1px solid ${BD}`,borderRadius:12,overflow:"hidden"}}>
+            <div style={{padding:"10px 14px",borderBottom:`1.5px solid ${BD}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div style={{fontWeight:700,fontSize:14,color:TX}}>{DIAS_SEMANA[diaIdx]}, {weekDates[diaIdx]?.toLocaleDateString("pt-BR",{day:"numeric",month:"long"})}</div>
+              <div style={{fontSize:11,color:TX2}}>{blocosNoDia(fmtDatePl(weekDates[diaIdx]||new Date())).length} blocos · {Math.floor(blocosNoDia(fmtDatePl(weekDates[diaIdx]||new Date())).reduce((s,b)=>s+(b.tempo_previsto||0),0)/60)}h planejadas</div>
+            </div>
+            {[{label:"☀️ Manhã",horas:HORAS_MANHA,min:480,max:720},
+              {label:"🌤 Tarde",horas:HORAS_TARDE,min:840,max:1020}].map(periodo=>{
+              const ds=fmtDatePl(weekDates[diaIdx]||new Date());
+              const perioBlocos=blocosNoDia(ds).filter(b=>timeToMin(b.hora_inicio)>=periodo.min&&timeToMin(b.hora_inicio)<periodo.max);
+              return(
+                <div key={periodo.label} style={{borderBottom:`1.5px dashed ${BD}`}}>
+                  <div style={{padding:"6px 14px",background:"#FAFBFF",fontSize:10,fontWeight:600,color:TX2,textTransform:"uppercase",letterSpacing:"0.5px"}}>{periodo.label}</div>
+                  {periodo.horas.slice(0,-1).map(h=>{
+                    const blocoNaHora=perioBlocos.filter(b=>b.hora_inicio===h);
+                    const isOcupado=perioBlocos.some(b=>timeToMin(b.hora_inicio)<=timeToMin(h)&&timeToMin(b.hora_fim)>timeToMin(h)&&b.hora_inicio!==h);
+                    return(
+                      <div key={h} style={{display:"flex",borderTop:`1px solid ${h.endsWith("00")?BD:"#F0F3FA"}`,minHeight:36}}>
+                        <div style={{width:56,padding:"4px 8px",fontSize:10,color:TX2,flexShrink:0,borderRight:`1px solid ${BD}`,lineHeight:"28px"}}>{h.endsWith("00")||h.endsWith("30")?h:""}</div>
+                        <div style={{flex:1,padding:"2px 6px",background:isOcupado?"#FAFBFF":"#fff"}}>
+                          {blocoNaHora.map(b=><BlocoCard key={b.id} b={b}/>)}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL NOVO BLOCO */}
+      {showFormPl&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(20,40,80,0.4)",zIndex:500,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:0}} onClick={e=>e.target===e.currentTarget&&setShowFormPl(false)}>
+          <div style={{background:"#fff",borderRadius:"16px 16px 0 0",padding:"20px 16px 32px",width:"100%",maxWidth:540,maxHeight:"92vh",overflowY:"auto"}}>
+            <div style={{width:36,height:4,background:"#DDE3F0",borderRadius:2,margin:"0 auto 16px"}}/>
+            <div style={{fontWeight:700,fontSize:16,color:C,marginBottom:14,borderBottom:`2px solid ${CL}`,paddingBottom:10}}>
+              {editBloco?"✏️ Editar Bloco":"✨ Novo Bloco"}
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:11}}>
+              <div>
+                <label style={lblStyle}>Título *</label>
+                <input style={inputStyle} value={formPl.titulo} onChange={e=>{
+                  const t=e.target.value;
+                  const tp=Object.entries(TEMPO_PADRAO).find(([k])=>t.toLowerCase().includes(k.toLowerCase()));
+                  setFormPl(f=>({...f,titulo:t,tempo_previsto:tp?tp[1]:f.tempo_previsto,hora_fim:tp?addMinutes(f.hora_inicio,tp[1]):f.hora_fim}));
+                }} placeholder="Ex: Folha de Pagamento, Reunião com cliente..."/>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                <div>
+                  <label style={lblStyle}>Categoria</label>
+                  <select style={inputStyle} value={formPl.categoria} onChange={e=>setFormPl(f=>({...f,categoria:e.target.value,subcategoria:""}))}>
+                    {Object.entries(PL_CATS).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={lblStyle}>Subcategoria</label>
+                  <select style={inputStyle} value={formPl.subcategoria} onChange={e=>setFormPl(f=>({...f,subcategoria:e.target.value}))}>
+                    <option value="">— Selecione —</option>
+                    {(PL_CATS[formPl.categoria]?.subs||[]).map(s=><option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                <div>
+                  <label style={lblStyle}>Prioridade</label>
+                  <select style={inputStyle} value={formPl.prioridade} onChange={e=>setFormPl(f=>({...f,prioridade:e.target.value}))}>
+                    {Object.entries(PL_PRIS).map(([k,v])=><option key={k} value={k}>{v.dot} {v.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={lblStyle}>Urgência</label>
+                  <select style={inputStyle} value={formPl.urgencia} onChange={e=>setFormPl(f=>({...f,urgencia:e.target.value}))}>
+                    {Object.entries(PL_URG).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
+                <div>
+                  <label style={lblStyle}>Data</label>
+                  <input type="date" style={inputStyle} value={formPl.data} onChange={e=>setFormPl(f=>({...f,data:e.target.value}))}/>
+                </div>
+                <div>
+                  <label style={lblStyle}>Início</label>
+                  <select style={inputStyle} value={formPl.hora_inicio} onChange={e=>{
+                    const hi=e.target.value;
+                    setFormPl(f=>({...f,hora_inicio:hi,hora_fim:addMinutes(hi,f.tempo_previsto)}));
+                  }}>
+                    {TODAS_HORAS.map(h=><option key={h} value={h}>{h}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={lblStyle}>Fim</label>
+                  <select style={inputStyle} value={formPl.hora_fim} onChange={e=>setFormPl(f=>({...f,hora_fim:e.target.value,tempo_previsto:timeToMin(e.target.value)-timeToMin(f.hora_inicio)}))}>
+                    {TODAS_HORAS.map(h=><option key={h} value={h}>{h}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                <div>
+                  <label style={lblStyle}>Tempo previsto (min)</label>
+                  <input type="number" style={inputStyle} value={formPl.tempo_previsto} onChange={e=>setFormPl(f=>({...f,tempo_previsto:Number(e.target.value),hora_fim:addMinutes(f.hora_inicio,Number(e.target.value))}))} min={15} step={15}/>
+                </div>
+                <div>
+                  <label style={lblStyle}>Tempo realizado (min)</label>
+                  <input type="number" style={inputStyle} value={formPl.tempo_realizado||0} onChange={e=>setFormPl(f=>({...f,tempo_realizado:Number(e.target.value)}))} min={0} step={15}/>
+                </div>
+              </div>
+              {!editBloco&&<div>
+                <label style={lblStyle}>Recorrência</label>
+                <select style={inputStyle} value={formPl.recorrencia} onChange={e=>setFormPl(f=>({...f,recorrencia:e.target.value}))}>
+                  <option value="nenhuma">Sem recorrência</option>
+                  <option value="diaria">Diária (toda a semana)</option>
+                  <option value="semanal">Semanal</option>
+                </select>
+              </div>}
+              <div>
+                <label style={lblStyle}>Observações</label>
+                <textarea style={{...inputStyle,resize:"none"}} rows={2} value={formPl.observacoes} onChange={e=>setFormPl(f=>({...f,observacoes:e.target.value}))} placeholder="Notas, links, contexto..."/>
+              </div>
+              <div style={{display:"flex",gap:8,marginTop:4}}>
+                <button onClick={()=>setShowFormPl(false)} style={{flex:1,background:"#fff",border:`1px solid ${BD}`,color:TX2,borderRadius:8,padding:"12px",fontSize:14,fontFamily:"inherit",cursor:"pointer"}}>Cancelar</button>
+                <button onClick={saveBloco} style={{flex:2,background:C,color:"#fff",border:"none",borderRadius:8,padding:"12px",fontSize:14,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>{editBloco?"Salvar":"Criar bloco"}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 // ─────────────────────────────────────────────
 // DASHBOARD COMPONENT
