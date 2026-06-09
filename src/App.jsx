@@ -65,23 +65,72 @@ function slotLivre(hora,duracaoMin,agendados){
   });
 }
 
+// ── REGRAS DE NEGÓCIO AUTOMÁTICAS ──
+const FERIAS_PERIODO = {inicio:"2026-07-13",fim:"2026-07-24"};
+
+function isFerias(dateStr){
+  return dateStr>=FERIAS_PERIODO.inicio&&dateStr<=FERIAS_PERIODO.fim;
+}
+
+function diaUtilAnterior(dateStr){
+  const d=new Date(dateStr+"T12:00:00");
+  while(d.getDay()===0||d.getDay()===6){d.setDate(d.getDate()-1);}
+  return d.toISOString().split("T")[0];
+}
+
+function isDiaMarketing(){
+  const dow=new Date().getDay();
+  return dow===1||dow===3||dow===5;
+}
+
+// Gera alertas de rotinas mensais baseados na data atual
+function gerarAlertasRotinas(){
+  const hoje=new Date();
+  const dia=hoje.getDate();
+  const alertas=[];
+  if(dia>=25||dia<=5)alertas.push("📥 Período de folha — receber pontos dos clientes (dia 25–01)");
+  if(dia>=1&&dia<=5)alertas.push("⚙️ Processamento de folha em andamento (prazo: dia 05)");
+  if(dia>=8&&dia<=12)alertas.push("📊 REINF e PER/DCOMP vencendo próximo ao dia 10");
+  if(dia>=10&&dia<=15)alertas.push("📋 Emissão de guias — prazo até dia 15");
+  if(dia===1||dia===15)alertas.push("⚖️ Verificar convenções coletivas e atualizações sindicais");
+  if(dia===1||dia===16)alertas.push("🏛 Revisar processos na RFB (quinzenal)");
+  return alertas;
+}
+
+
 function montarAgendaDia(tasks){
-  // Filtra tarefas pendentes para hoje e próximos dias
   const hoje=new Date(); hoje.setHours(0,0,0,0);
   const todayS=hoje.toISOString().split("T")[0];
+
+  // Bloquear férias
+  if(isFerias(todayS)){
+    return[{hora:"08:00",horaFim:"17:00",titulo:"🏖️ Período de Férias — Agenda Bloqueada",tipo:"ferias",cor:"#C41E3A",obs:"13/07 a 24/07/2026"}];
+  }
+
   const in7=new Date(hoje); in7.setDate(hoje.getDate()+7);
   const in7S=in7.toISOString().split("T")[0];
 
+  // Ordenação inteligente por prioridade de negócio
   const candidatas=[...tasks]
     .filter(t=>!t.done&&t.due<=in7S)
     .sort((a,b)=>{
+      // Admissões com documentação completa — prioridade máxima
+      const isAdmA=(a.tipo_atividade==="admissao"&&a.documentacao_completa)||(a.title||"").toLowerCase().includes("admiss")&&a.category==="dp";
+      const isAdmB=(b.tipo_atividade==="admissao"&&b.documentacao_completa)||(b.title||"").toLowerCase().includes("admiss")&&b.category==="dp";
+      if(isAdmA&&!isAdmB)return -1;
+      if(!isAdmA&&isAdmB)return 1;
+      // Atrasadas sobem
+      const aAtras=a.due<todayS; const bAtras=b.due<todayS;
+      if(aAtras&&!bAtras)return -1;
+      if(!aAtras&&bAtras)return 1;
+      // Prioridade
       const ordemPri={urgente:0,alta:1,media:2,baixa:3};
       const pa=ordemPri[a.priority]||2; const pb=ordemPri[b.priority]||2;
       if(pa!==pb)return pa-pb;
       return a.due<b.due?-1:1;
     });
 
-  // Blocos fixos já alocados
+  // Blocos fixos reservados
   const agendados=[
     {inicio:"08:00",fim:"08:15",tipo:"checkin"},
     {inicio:"09:00",fim:"09:30",tipo:"atendimento"},
@@ -91,46 +140,65 @@ function montarAgendaDia(tasks){
     {inicio:"16:45",fim:"17:00",tipo:"checkout"},
   ];
 
-  const agenda=[];
-  let horaAtual="08:15";
+  // Marketing Seg/Qua/Sex — 10:20 às 10:30
+  if(isDiaMarketing()){
+    agendados.push({inicio:"10:20",fim:"10:30",tipo:"marketing"});
+  }
 
+  const agenda=[];
   // Check-in sempre primeiro
-  agenda.push({hora:"08:00",horaFim:"08:15",titulo:"✅ Check-in Diário",tipo:"ritual",cor:NM,obs:"Revisão de prioridades · Urgências · Organização do dia"});
+  agenda.push({hora:"08:00",horaFim:"08:15",titulo:"✅ Check-in Diário",tipo:"ritual",cor:"#0F2040",obs:"Revisar agenda · Prioridades · Urgências · Planejar o dia"});
+  // Marketing
+  if(isDiaMarketing()){
+    agenda.push({hora:"10:20",horaFim:"10:30",titulo:"📣 Postagem Instagram",tipo:"marketing",cor:"#AD1457",obs:"Publicação de conteúdo — 10 minutos"});
+  }
+
+  let horaAtual="08:15";
+  let tarefasInseridas=0;
 
   for(const t of candidatas){
-    const duracao=t.tempo_estimado||TEMPO_POR_CATEGORIA[t.category]||60;
-    // Pular se hora atual é horário de atendimento
-    for(const b of BLOCOS_ATENDIMENTO){
-      if(toMin(horaAtual)>=toMin(b.inicio)&&toMin(horaAtual)<toMin(b.fim)){
-        horaAtual=b.fim;
+    // Usar tempo_estimado do tipo_atividade se disponível
+    const tipoInfo=TIPOS_ATIVIDADE[t.tipo_atividade];
+    const duracao=t.tempo_estimado||tipoInfo?.tempo||TEMPO_POR_CATEGORIA[t.category]||60;
+    // Pular tarefas que não permitem agendamento automático
+    if(t.permite_agendamento===false)continue;
+    // Pular admissões sem documentação completa
+    if(t.tipo_atividade==="admissao"&&!t.documentacao_completa)continue;
+    // Pular tarefas aguardando informações
+    if(t.status_operacional==="aguardando_info"||t.status_operacional==="aguardando_cliente")continue;
+    // Avançar sobre blocos fixos
+    let tentativas=0;
+    while(tentativas<15){
+      tentativas++;
+      if(toMin(horaAtual)>=toMin("12:00")&&toMin(horaAtual)<toMin("14:00")){horaAtual="14:00";}
+      let pulou=false;
+      for(const b of agendados){
+        if(toMin(horaAtual)>=toMin(b.inicio)&&toMin(horaAtual)<toMin(b.fim)){horaAtual=b.fim;pulou=true;break;}
       }
+      if(!pulou)break;
     }
-    // Pular intervalo almoço
-    if(toMin(horaAtual)>=toMin("12:00")&&toMin(horaAtual)<toMin("14:00")){
-      horaAtual="14:00";
-    }
-    // Verificar se cabe
-    if(!slotLivre(horaAtual,duracao,agendados)) continue;
-    const horaFim=addMin(horaAtual,duracao);
-    // Verificar se a hora fim não passa por blocos fixos
+    if(toMin(horaAtual)+duracao>toMin("17:00"))continue;
+    if(!slotLivre(horaAtual,duracao,agendados))continue;
     let colide=false;
-    for(const b of BLOCOS_ATENDIMENTO){
-      if(toMin(horaAtual)<toMin(b.fim)&&toMin(horaFim)>toMin(b.inicio)){colide=true;break;}
+    for(const b of agendados){
+      if(toMin(horaAtual)<toMin(b.fim)&&toMin(horaAtual)+duracao>toMin(b.inicio)){colide=true;break;}
     }
-    if(colide) continue;
-    agenda.push({hora:horaAtual,horaFim,titulo:t.title,tipo:"tarefa",cor:CATEGORIES[t.category]?.color||NM,cat:t.category,pri:t.priority,cliente:t.client,id:t.id});
+    if(colide){horaAtual=addMin(horaAtual,15);continue;}
+    const horaFim=addMin(horaAtual,duracao);
+    agenda.push({hora:horaAtual,horaFim,titulo:t.title,tipo:"tarefa",cor:CATEGORIES[t.category]?.color||"#0F2040",cat:t.category,pri:t.priority,cliente:t.client,id:t.id,atrasada:t.due<todayS,tipoAtiv:t.tipo_atividade,statusOp:t.status_operacional});
     agendados.push({inicio:horaAtual,fim:horaFim});
     horaAtual=addMin(horaFim,5);
-    if(agenda.length>=8)break;
+    tarefasInseridas++;
+    if(tarefasInseridas>=7)break;
   }
 
   // Blocos de atendimento
   BLOCOS_ATENDIMENTO.forEach(b=>{
-    agenda.push({hora:b.inicio,horaFim:b.fim,titulo:"👥 Atendimento Clientes",tipo:"atendimento",cor:"#2E7D32"});
+    agenda.push({hora:b.inicio,horaFim:b.fim,titulo:"👥 Atendimento Clientes",tipo:"atendimento",cor:"#2E7D32",obs:"Reservado — ligações, reuniões, retornos, suporte"});
   });
 
   // Check-out
-  agenda.push({hora:"16:45",horaFim:"17:00",titulo:"🔍 Check-out Diário",tipo:"ritual",cor:NM,obs:"Conferência de entregas · Pendências · Planejamento amanhã"});
+  agenda.push({hora:"16:45",horaFim:"17:00",titulo:"🔍 Check-out Diário",tipo:"ritual",cor:"#0F2040",obs:"Revisar entregas · Pendências · Planejar amanhã"});
 
   return agenda.sort((a,b)=>toMin(a.hora)-toMin(b.hora));
 }
@@ -141,13 +209,16 @@ function gerarResumoIA(tasks,agenda){
   const atrasadas=tasks.filter(t=>!t.done&&t.due<todayS);
   const urgentes=tasks.filter(t=>!t.done&&(t.priority==="urgente"||t.priority==="alta"));
   const tarefasHoje=agenda.filter(a=>a.tipo==="tarefa");
-  const carga=Math.min(Math.round((tarefasHoje.length/6)*100),100);
+  const carga=Math.min(Math.round((tarefasHoje.length/7)*100),100);
   const hora=hoje.getHours();
   const saudacao=hora<12?"Bom dia":hora<18?"Boa tarde":"Boa noite";
 
-  const alertas=[];
-  if(atrasadas.length>0)alertas.push(`${atrasadas.length} tarefa${atrasadas.length>1?"s":""} em atraso`);
-  const admissoes=tasks.filter(t=>!t.done&&t.category==="dp"&&t.title.toLowerCase().includes("admissão"));
+  const alertas=[...gerarAlertasRotinas()];
+  if(atrasadas.length>0)alertas.unshift(`⚠️ ${atrasadas.length} tarefa${atrasadas.length>1?"s":""} em atraso`);
+  if(isFerias(todayS))alertas.unshift("🏖️ Período de férias — agenda bloqueada");
+  const admissoes=tasks.filter(t=>!t.done&&(t.tipo_atividade==="admissao"||(t.title||"").toLowerCase().includes("admiss")));
+  const semDocAdm=admissoes.filter(t=>!t.documentacao_completa);
+  if(semDocAdm.length>0)alertas.push(`📋 ${semDocAdm.length} admissão${semDocAdm.length>1?"ões":""} aguardando documentação`);
   if(admissoes.length>0)alertas.push(`${admissoes.length} admissão${admissoes.length>1?"ões":""} pendente${admissoes.length>1?"s":""}`);
 
   const prioMax=urgentes[0]?.title||"Nenhuma urgência";
@@ -171,6 +242,31 @@ const PRIORITIES={
   media:{label:"Média",color:"#F9A825",bg:"#FFFDE7",dot:"●"},
   baixa:{label:"Baixa",color:"#2E7D32",bg:"#E8F5E9",dot:"●"},
 };
+
+const TIPOS_ATIVIDADE = {
+  admissao:      { label:"Admissão",          icon:"👤", tempo:30,  prioridade:"urgente" },
+  rescisao:      { label:"Rescisão",           icon:"📄", tempo:60,  prioridade:"urgente" },
+  folha:         { label:"Folha",              icon:"💼", tempo:90,  prioridade:"alta"    },
+  guia:          { label:"Guia/DARF/FGTS",     icon:"📋", tempo:60,  prioridade:"alta"    },
+  atendimento:   { label:"Atendimento",        icon:"🤝", tempo:30,  prioridade:"alta"    },
+  reuniao:       { label:"Reunião",            icon:"👥", tempo:30,  prioridade:"media"   },
+  processo_rfb:  { label:"Processo RFB",       icon:"🏛", tempo:30,  prioridade:"media"   },
+  convencao:     { label:"Convenção Coletiva", icon:"⚖️", tempo:30,  prioridade:"media"   },
+  marketing:     { label:"Marketing",          icon:"📣", tempo:10,  prioridade:"baixa"   },
+  parametrizacao:{ label:"Parametrização",     icon:"⚙️", tempo:60,  prioridade:"media"   },
+  estudo:        { label:"Estudo/Curso",        icon:"📚", tempo:90,  prioridade:"baixa"   },
+  administrativo:{ label:"Administrativo",     icon:"🗂", tempo:30,  prioridade:"baixa"   },
+  outros:        { label:"Outros",             icon:"📌", tempo:30,  prioridade:"media"   },
+};
+
+const STATUS_OPERACIONAL = {
+  aguardando_info:    "Aguardando informações",
+  pronto:             "Pronto para execução",
+  em_andamento:       "Em andamento",
+  aguardando_cliente: "Aguardando cliente",
+  concluido:          "Concluído",
+};
+
 
 const PROCESS_TEMPLATES={
   folha:{label:"Folha de Pagamento",icon:"💼",category:"dp",color:"#6A1B9A",steps:[
@@ -278,7 +374,13 @@ export default function App(){
   const [fechaLoading,setFechaLoading]=useState(false);
   const recognitionRef=useRef(null);
   const monthKey=getCurrentMonthKey();
-  const emptyForm={title:"",category:"dp",priority:"media",due:todayStr,client:"",notes:"",created_at:todayStr,completed_at:""};
+  const emptyForm={
+    title:"",category:"dp",priority:"media",due:todayStr,client:"",notes:"",
+    created_at:todayStr,completed_at:"",
+    tipo_atividade:"outros",tempo_estimado:30,
+    status_operacional:"pronto",documentacao_completa:false,
+    permite_agendamento:true,dependencia:"",
+  };
   const [form,setForm]=useState(emptyForm);
 
   useEffect(()=>{fetchTasks();},[]);
@@ -362,7 +464,20 @@ export default function App(){
   async function saveForm(){
     if(!form.title.trim())return;
     setSaving(true);
-    const payload={title:form.title,category:form.category,priority:form.priority,due:form.due,client:form.client,notes:form.notes,created_at:form.created_at,completed_at:form.completed_at||null,done:false};
+    // Auto-definir prioridade e tempo por tipo de atividade
+    const tipo=TIPOS_ATIVIDADE[form.tipo_atividade];
+    const prioridade=form.tipo_atividade!=="outros"?tipo?.prioridade||form.priority:form.priority;
+    const tempo=form.tempo_estimado||tipo?.tempo||60;
+    const payload={
+      title:form.title,category:form.category,priority:prioridade,due:form.due,
+      client:form.client,notes:form.notes,created_at:form.created_at,
+      completed_at:form.completed_at||null,done:false,
+      tipo_atividade:form.tipo_atividade,tempo_estimado:tempo,
+      status_operacional:form.status_operacional,
+      documentacao_completa:form.documentacao_completa,
+      permite_agendamento:form.permite_agendamento,
+      dependencia:form.dependencia,
+    };
     if(editId){await supabase.from("tasks").update(payload).eq("id",editId);showToast("Tarefa atualizada!");}
     else{await supabase.from("tasks").insert([payload]);showToast("Tarefa criada!");}
     setShowForm(false);setEditId(null);setForm(emptyForm);setSaving(false);fetchTasks();
@@ -376,7 +491,20 @@ export default function App(){
   }
 
   async function deleteTask(id){await supabase.from("tasks").delete().eq("id",id);setTasks(prev=>prev.filter(x=>x.id!==id));showToast("Removida");}
-  function openEdit(t){setForm({title:t.title,category:t.category,priority:t.priority,due:t.due,client:t.client||"",notes:t.notes||"",created_at:t.created_at||todayStr,completed_at:t.completed_at||""});setEditId(t.id);setShowForm(true);}
+  function openEdit(t){
+    setForm({
+      title:t.title,category:t.category,priority:t.priority,due:t.due,
+      client:t.client||"",notes:t.notes||"",created_at:t.created_at||todayStr,
+      completed_at:t.completed_at||"",
+      tipo_atividade:t.tipo_atividade||"outros",
+      tempo_estimado:t.tempo_estimado||60,
+      status_operacional:t.status_operacional||"pronto",
+      documentacao_completa:t.documentacao_completa||false,
+      permite_agendamento:t.permite_agendamento!==false,
+      dependencia:t.dependencia||"",
+    });
+    setEditId(t.id);setShowForm(true);
+  }
 
   async function createProcess(){
     if(!selectedTemplate||!templateClient.trim())return;
@@ -417,7 +545,16 @@ export default function App(){
   },[tasks]);
 
   const weekTasksFor=(ds)=>tasks.filter(t=>!t.done&&t.due===ds).sort((a,b)=>scoreTask(b)-scoreTask(a));
-  const allFiltered=useMemo(()=>[...pending].filter(t=>filterCat==="all"||t.category===filterCat).filter(t=>filterPri==="all"||t.priority===filterPri).sort((a,b)=>scoreTask(b)-scoreTask(a)),[tasks,filterCat,filterPri]);
+  const allFiltered=useMemo(()=>[...pending]
+    .filter(t=>filterCat==="all"||t.category===filterCat)
+    .filter(t=>filterPri==="all"||t.priority===filterPri)
+    .sort((a,b)=>{
+      // Admissões com doc completa sempre no topo
+      const aAdm=a.tipo_atividade==="admissao"&&a.documentacao_completa;
+      const bAdm=b.tipo_atividade==="admissao"&&b.documentacao_completa;
+      if(aAdm&&!bAdm)return -1; if(!aAdm&&bAdm)return 1;
+      return scoreTask(b)-scoreTask(a);
+    }),[tasks,filterCat,filterPri]);
   const clientPanel=useMemo(()=>{
     const filtered=filterClient==="all"?pending:pending.filter(t=>t.client===filterClient);
     const grouped={};
@@ -659,27 +796,98 @@ export default function App(){
         ))}
       </div>
 
-      {/* MODAL NOVA TAREFA — sobe da base no celular */}
+      {/* MODAL NOVA TAREFA */}
       {showForm&&(
         <div style={S.overlay} onClick={e=>e.target===e.currentTarget&&setShowForm(false)}>
           <div style={S.modal}>
-            <div style={{width:36,height:4,background:BORDER,borderRadius:2,margin:"0 auto 16px"}}/>
-            <div style={{fontWeight:700,fontSize:16,color:BLUE,marginBottom:15,borderBottom:`2px solid ${BLUE_LIGHT}`,paddingBottom:10}}>{editId?"✏️ Editar Tarefa":"✨ Nova Tarefa"}</div>
+            <div style={{width:36,height:4,background:"#E2E6EE",borderRadius:2,margin:"0 auto 16px"}}/>
+            <div style={{fontWeight:700,fontSize:16,color:"#0F2040",marginBottom:15,borderBottom:"2px solid #E8EDF5",paddingBottom:10}}>{editId?"✏️ Editar Tarefa":"✨ Nova Tarefa"}</div>
             <div style={{display:"flex",flexDirection:"column",gap:12}}>
-              <div><label style={S.lbl}>Título *</label><input style={S.inp} value={form.title} onChange={e=>setForm(f=>({...f,title:e.target.value}))} placeholder="Ex: Folha de pagamento maio..."/></div>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                <div><label style={S.lbl}>Categoria</label><select style={S.inp} value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}>{Object.entries(CATEGORIES).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}</select></div>
-                <div><label style={S.lbl}>Prioridade</label><select style={S.inp} value={form.priority} onChange={e=>setForm(f=>({...f,priority:e.target.value}))}>{Object.entries(PRIORITIES).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</select></div>
+
+              {/* Título */}
+              <div><label style={S.lbl}>Título *</label>
+                <input style={S.inp} value={form.title} onChange={e=>setForm(f=>({...f,title:e.target.value}))} placeholder="Ex: Admissão João Silva, Folha Cantina..."/>
               </div>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                <div><label style={S.lbl}>Prazo</label><input type="date" style={S.inp} value={form.due} onChange={e=>setForm(f=>({...f,due:e.target.value}))}/></div>
-                <div><label style={S.lbl}>Data de Entrada</label><input type="date" style={S.inp} value={form.created_at} onChange={e=>setForm(f=>({...f,created_at:e.target.value}))}/></div>
+
+              {/* Tipo de atividade — determina tempo e prioridade automaticamente */}
+              <div><label style={S.lbl}>Tipo de Atividade</label>
+                <select style={S.inp} value={form.tipo_atividade} onChange={e=>{
+                  const tipo=TIPOS_ATIVIDADE[e.target.value];
+                  setForm(f=>({...f,tipo_atividade:e.target.value,tempo_estimado:tipo?.tempo||f.tempo_estimado,priority:tipo?.prioridade||f.priority}));
+                }}>
+                  {Object.entries(TIPOS_ATIVIDADE).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}
+                </select>
               </div>
-              <div><label style={S.lbl}>Cliente</label><input style={S.inp} value={form.client} onChange={e=>setForm(f=>({...f,client:e.target.value}))} placeholder="Nome do cliente..."/></div>
-              <div><label style={S.lbl}>Observações</label><textarea style={{...S.inp,resize:"none"}} rows={2} value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} placeholder="Detalhes adicionais..."/></div>
+
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                <div><label style={S.lbl}>Categoria</label>
+                  <select style={S.inp} value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}>
+                    {Object.entries(CATEGORIES).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}
+                  </select>
+                </div>
+                <div><label style={S.lbl}>Prioridade</label>
+                  <select style={S.inp} value={form.priority} onChange={e=>setForm(f=>({...f,priority:e.target.value}))}>
+                    {Object.entries(PRIORITIES).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                <div><label style={S.lbl}>Status Operacional</label>
+                  <select style={S.inp} value={form.status_operacional} onChange={e=>setForm(f=>({...f,status_operacional:e.target.value}))}>
+                    {Object.entries(STATUS_OPERACIONAL).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+                  </select>
+                </div>
+                <div><label style={S.lbl}>Tempo estimado (min)</label>
+                  <input type="number" style={S.inp} value={form.tempo_estimado} min={10} step={10}
+                    onChange={e=>setForm(f=>({...f,tempo_estimado:Number(e.target.value)}))}/>
+                </div>
+              </div>
+
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                <div><label style={S.lbl}>Prazo</label>
+                  <input type="date" style={S.inp} value={form.due} onChange={e=>setForm(f=>({...f,due:e.target.value}))}/>
+                </div>
+                <div><label style={S.lbl}>Data de Entrada</label>
+                  <input type="date" style={S.inp} value={form.created_at} onChange={e=>setForm(f=>({...f,created_at:e.target.value}))}/>
+                </div>
+              </div>
+
+              <div><label style={S.lbl}>Cliente</label>
+                <input style={S.inp} value={form.client} onChange={e=>setForm(f=>({...f,client:e.target.value}))} placeholder="Nome do cliente..."/>
+              </div>
+
+              {/* Campos condicionais */}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                {form.tipo_atividade==="admissao"&&(
+                  <div style={{display:"flex",alignItems:"center",gap:8,background:"#F3E5F5",borderRadius:8,padding:"10px 12px"}}>
+                    <input type="checkbox" id="doc" checked={form.documentacao_completa} onChange={e=>setForm(f=>({...f,documentacao_completa:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/>
+                    <label htmlFor="doc" style={{fontSize:12.5,fontWeight:600,color:"#6A1B9A",cursor:"pointer"}}>Documentação completa</label>
+                  </div>
+                )}
+                <div style={{display:"flex",alignItems:"center",gap:8,background:"#E8EDF5",borderRadius:8,padding:"10px 12px"}}>
+                  <input type="checkbox" id="ag" checked={form.permite_agendamento} onChange={e=>setForm(f=>({...f,permite_agendamento:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/>
+                  <label htmlFor="ag" style={{fontSize:12.5,fontWeight:600,color:"#0F2040",cursor:"pointer"}}>Agendar automaticamente</label>
+                </div>
+              </div>
+
+              {/* Dependência */}
+              <div><label style={S.lbl}>Dependência / Observações</label>
+                <textarea style={{...S.inp,resize:"none"}} rows={2} value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} placeholder="Ex: Aguardando retorno do cliente, documentação pendente..."/>
+              </div>
+
+              {/* Alerta admissão */}
+              {form.tipo_atividade==="admissao"&&form.documentacao_completa&&(
+                <div style={{background:"#F3E5F5",border:"1px solid #9C27B0",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#6A1B9A",fontWeight:500}}>
+                  ⚡ Admissão com documentação completa — será priorizada automaticamente na agenda. Prazo: 3 dias.
+                </div>
+              )}
+
               <div style={{display:"flex",gap:8,marginTop:4}}>
-                <button onClick={()=>setShowForm(false)} style={{flex:1,background:"#fff",border:`1px solid ${BORDER}`,color:TEXT2,borderRadius:8,padding:"12px",fontSize:14,fontFamily:"inherit",cursor:"pointer"}}>Cancelar</button>
-                <button onClick={saveForm} disabled={saving} style={{flex:2,background:saving?"#90A4AE":BLUE,color:"#fff",border:"none",borderRadius:8,padding:"12px",fontSize:14,fontWeight:700,fontFamily:"inherit",cursor:saving?"not-allowed":"pointer"}}>{saving?"Salvando...":editId?"Salvar":"Criar tarefa"}</button>
+                <button onClick={()=>setShowForm(false)} style={{flex:1,background:"#fff",border:"1px solid #E2E6EE",color:"#6B7A99",borderRadius:8,padding:"12px",fontSize:14,fontFamily:"inherit",cursor:"pointer"}}>Cancelar</button>
+                <button onClick={saveForm} disabled={saving} style={{flex:2,background:saving?"#90A4AE":"#0F2040",color:"#fff",border:"none",borderRadius:8,padding:"12px",fontSize:14,fontWeight:700,fontFamily:"inherit",cursor:saving?"not-allowed":"pointer"}}>
+                  {saving?"Salvando...":editId?"Salvar alterações":"Criar tarefa"}
+                </button>
               </div>
             </div>
           </div>
@@ -848,9 +1056,11 @@ function AgendaInteligente({tasks,pending,done,todayTasks,urgentesTab,comunsTab,
                   <div style={{flex:1,padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderLeft:`3px solid ${corBorda}`,background:i%2===0?"#FAFBFD":OW2}}>
                     <div style={{flex:1}}>
                       <div style={{fontSize:13,fontWeight:600,color:TX}}>{item.titulo}</div>
-                      <div style={{display:"flex",gap:6,marginTop:4,flexWrap:"wrap"}}>
+                      <div style={{display:"flex",gap:5,marginTop:4,flexWrap:"wrap"}}>
                         {item.tipo==="tarefa"&&cat&&<span style={{fontSize:9.5,background:cat.bg,color:cat.color,border:`1px solid ${cat.color}22`,borderRadius:5,padding:"1px 7px",fontWeight:600}}>{cat.icon} {cat.label}</span>}
+                        {item.tipoAtiv&&TIPOS_ATIVIDADE[item.tipoAtiv]&&<span style={{fontSize:9.5,background:"#F0F2F7",color:"#0F2040",borderRadius:5,padding:"1px 7px",fontWeight:500}}>{TIPOS_ATIVIDADE[item.tipoAtiv].icon} {TIPOS_ATIVIDADE[item.tipoAtiv].label}</span>}
                         {item.cliente&&<span style={{fontSize:9.5,color:TX2}}>👤 {item.cliente}</span>}
+                        {item.atrasada&&<span style={{fontSize:9.5,background:"#FCEEF1",color:"#C41E3A",borderRadius:5,padding:"1px 7px",fontWeight:700}}>⚠️ Atrasada</span>}
                         {item.obs&&<span style={{fontSize:9.5,color:TX3,fontStyle:"italic"}}>{item.obs}</span>}
                       </div>
                     </div>
@@ -985,7 +1195,10 @@ function Card({t,i,S,onToggle,onEdit,onDelete,compact,showDates}){
         <div style={{fontSize:compact?12.5:14,fontWeight:600,color:TX,lineHeight:1.3,marginBottom:5}}>{t.title}</div>
         <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
           <span style={{background:cat.bg,color:cat.color,border:`1px solid ${cat.color}22`,borderRadius:5,padding:"2px 7px",fontSize:9.5,fontWeight:600}}>{cat.icon} {cat.label}</span>
+          {t.tipo_atividade&&t.tipo_atividade!=="outros"&&TIPOS_ATIVIDADE[t.tipo_atividade]&&<span style={{background:"#F0F2F7",color:"#0F2040",borderRadius:5,padding:"2px 7px",fontSize:9.5,fontWeight:500}}>{TIPOS_ATIVIDADE[t.tipo_atividade].icon} {TIPOS_ATIVIDADE[t.tipo_atividade].label}</span>}
           <span style={{background:pri.bg||"#F5F6FA",color:pri.color,borderRadius:5,padding:"2px 7px",fontSize:9.5,fontWeight:600}}>{pri.dot} {pri.label}</span>
+          {t.status_operacional&&t.status_operacional!=="pronto"&&t.status_operacional!=="concluido"&&<span style={{background:"#FFF8E1",color:"#F57F17",borderRadius:5,padding:"2px 7px",fontSize:9.5,fontWeight:500}}>⏳ {STATUS_OPERACIONAL[t.status_operacional]}</span>}
+          {t.tipo_atividade==="admissao"&&!t.documentacao_completa&&<span style={{background:"#FFF3E0",color:"#E65100",borderRadius:5,padding:"2px 7px",fontSize:9.5,fontWeight:600}}>📋 Aguard. doc</span>}
           {isProx&&(t.priority==="urgente"||t.priority==="alta")&&<span style={{background:RDL,color:RD,borderRadius:5,padding:"2px 7px",fontSize:9.5,fontWeight:600}}>⚡ próx.7d</span>}
           {!compact&&t.client&&<span style={{fontSize:10,color:TX2}}>👤 {t.client}</span>}
           {!compact&&showDates&&t.created_at&&<span style={{fontSize:10,color:TX2}}>📅 {ptDate(t.created_at)}</span>}
