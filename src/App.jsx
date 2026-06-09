@@ -572,10 +572,10 @@ export default function App(){
   const mesTasksFor=(ds)=>tasks.filter(t=>!t.done&&t.due===ds).sort((a,b)=>scoreTask(b)-scoreTask(a));
 
   const stats=[
-    {label:"Urgentes",val:urgentesTab.length,color:RED,bg:RED_LIGHT},
-    {label:"Comuns Hoje",val:comunsTab.length,color:BLUE,bg:BLUE_LIGHT},
-    {label:"Esta Semana",val:pending.filter(t=>t.due>=fmtDate(weekStart)&&t.due<=fmtDate(addDays(weekStart,6))).length,color:"#00838F",bg:"#E0F7FA"},
-    {label:"Concluídas",val:done.length,color:"#2E7D32",bg:"#E8F5E9"},
+    {label:"Urgentes",val:urgentesTab.length,color:RD,bg:RDL,onClick:()=>{setView("agenda");}},
+    {label:"Comuns Hoje",val:comunsTab.length,color:NM,bg:NML,onClick:()=>{setView("agenda");}},
+    {label:"Esta Semana",val:pending.filter(t=>t.due>=fmtDate(weekStart)&&t.due<=fmtDate(addDays(weekStart,6))).length,color:"#00838F",bg:"#E0F7FA",onClick:()=>setView("tarefas")},
+    {label:"Concluídas",val:done.length,color:"#1B6B3A",bg:"#E8F5E9",onClick:()=>setView("tarefas")},
   ];
 
   const S={
@@ -667,6 +667,80 @@ export default function App(){
         
 
                 {/* ── DASHBOARD ── */}
+        {/* ── CLIENTES ── */}
+        {view==="clientes"&&<>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,flexWrap:"wrap",gap:8}}>
+            <div style={{fontWeight:800,fontSize:22,color:TX,letterSpacing:"-0.5px"}}>Painel por Cliente</div>
+            <select value={filterClient} onChange={e=>setFilterClient(e.target.value)} style={{background:OW2,border:`1px solid ${BD}`,borderRadius:9,padding:"8px 12px",color:TX,fontSize:13,fontFamily:"inherit"}}>
+              <option value="all">Todos os clientes</option>
+              {allClients.map(c=><option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div style={{fontSize:12,color:TX2,marginBottom:16}}>Tarefas pendentes agrupadas por cliente</div>
+          {Object.keys(clientPanel).length===0&&<Empty icon="👥" msg="Nenhuma tarefa pendente."/>}
+          {Object.entries(clientPanel).sort((a,b)=>b[1].length-a[1].length).map(([client,ctasks])=>{
+            const temUrg=ctasks.some(t=>t.priority==="urgente");
+            const temAtras=ctasks.some(t=>t.due<todayStr);
+            return(<div key={client} style={{background:OW2,border:`1.5px solid ${temUrg||temAtras?RD:BD}`,borderRadius:12,padding:"14px 16px",marginBottom:12,boxShadow:"0 1px 4px rgba(15,32,64,.04)"}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                  <div style={{width:34,height:34,borderRadius:"50%",background:NML,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:800,color:NM}}>{client.charAt(0).toUpperCase()}</div>
+                  <div>
+                    <div style={{fontWeight:700,fontSize:14,color:TX}}>{client}</div>
+                    <div style={{fontSize:11,color:TX2}}>{ctasks.length} tarefa{ctasks.length!==1?"s":""} pendente{ctasks.length!==1?"s":""}</div>
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:6}}>
+                  {temAtras&&<span style={{fontSize:10,background:RDL,color:RD,borderRadius:6,padding:"3px 8px",fontWeight:700}}>⚠️ Atraso</span>}
+                  {temUrg&&<span style={{fontSize:10,background:RDL,color:RD,borderRadius:6,padding:"3px 8px",fontWeight:700}}>🔴 Urgente</span>}
+                </div>
+              </div>
+              {ctasks.map((t,i)=><Card key={t.id} t={t} i={i} S={S} compact onToggle={()=>toggleDone(t)} onEdit={()=>openEdit(t)} onDelete={()=>deleteTask(t.id)}/>)}
+            </div>);
+          })}
+        </>}
+
+        {/* ── TAREFAS ── */}
+        {view==="tarefas"&&<>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,flexWrap:"wrap",gap:8}}>
+            <div style={{fontWeight:800,fontSize:22,color:TX,letterSpacing:"-0.5px"}}>Todas as Tarefas</div>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+              <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} style={{background:OW2,border:`1px solid ${BD}`,borderRadius:9,padding:"8px 12px",color:TX,fontSize:13,fontFamily:"inherit"}}>
+                <option value="all">Todas categorias</option>
+                {Object.entries(CATEGORIES).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}
+              </select>
+              <select value={filterPri} onChange={e=>setFilterPri(e.target.value)} style={{background:OW2,border:`1px solid ${BD}`,borderRadius:9,padding:"8px 12px",color:TX,fontSize:13,fontFamily:"inherit"}}>
+                <option value="all">Todas prioridades</option>
+                {Object.entries(PRIORITIES).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+              </select>
+            </div>
+          </div>
+          {allFiltered.length===0?<Empty icon="🔍" msg="Nenhuma tarefa encontrada."/>
+            :allFiltered.map((t,i)=><Card key={t.id} t={t} i={i} S={S} showDates onToggle={()=>toggleDone(t)} onEdit={()=>openEdit(t)} onDelete={()=>deleteTask(t.id)}/>)}
+          {done.length>0&&(
+            <div style={{marginTop:20}}>
+              <div style={{fontSize:11,fontWeight:700,color:TX2,textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:8,cursor:"pointer",display:"flex",alignItems:"center",gap:6}} onClick={()=>setShowDone(v=>!v)}>
+                <span style={{width:3,height:14,background:BD,borderRadius:2,display:"inline-block"}}/>
+                Concluídas ({done.length}) {showDone?"▲":"▼"}
+              </div>
+              {showDone&&done.map(t=>(
+                <div key={t.id} style={{background:OW2,border:`1px solid ${BD}`,borderRadius:10,padding:"10px 14px",display:"flex",alignItems:"center",gap:10,marginBottom:6,opacity:.55}}>
+                  <span onClick={()=>toggleDone(t)} style={{width:22,height:22,borderRadius:"50%",background:"#1B6B3A",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"#fff",cursor:"pointer"}}>✓</span>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,textDecoration:"line-through",color:TX2}}>{t.title}</div>
+                    <div style={{fontSize:10.5,color:TX3,marginTop:2}}>
+                      {t.client&&<span style={{marginRight:10}}>👤 {t.client}</span>}
+                      <span>Entrada: {ptDate(t.created_at)}</span>
+                      {t.completed_at&&<span style={{marginLeft:10}}>✅ {ptDate(t.completed_at)}</span>}
+                    </div>
+                  </div>
+                  <span onClick={()=>deleteTask(t.id)} style={{cursor:"pointer",color:"#D0D6E2",fontSize:13}}>✕</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>}
+
         {view==="dashboard"&&<DashboardView fechaMap={fechaMap} fechaLoading={fechaLoading} onRefresh={fetchFechamento} getCell={getCell}/>}
 
                 {/* ── FECHAMENTO ── */}
