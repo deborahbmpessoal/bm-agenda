@@ -266,6 +266,96 @@ const STATUS_OPERACIONAL = {
 };
 
 
+// ── TAREFAS RECORRENTES FIXAS ──
+// Definição completa de todas as rotinas que devem existir mensalmente
+function getRecorrentesDoMes(){
+  const hoje = new Date();
+  const ano  = hoje.getFullYear();
+  const mes  = String(hoje.getMonth()+1).padStart(2,"0");
+  const mesProx = hoje.getMonth()===11 ? "01" : String(hoje.getMonth()+2).padStart(2,"0");
+  const anoProx = hoje.getMonth()===11 ? ano+1 : ano;
+
+  function d(dia){ return `${ano}-${mes}-${String(dia).padStart(2,"0")}`; }
+  function dProx(dia){ return `${anoProx}-${mesProx}-${String(dia).padStart(2,"0")}`; }
+
+  // Antecipa para dia útil se cair em fim de semana
+  function dUtil(dateStr){
+    const dt = new Date(dateStr+"T12:00:00");
+    while(dt.getDay()===0||dt.getDay()===6){ dt.setDate(dt.getDate()-1); }
+    return dt.toISOString().split("T")[0];
+  }
+
+  // Próximas terças-feiras (para RFB quinzenal)
+  function proximasTercas(){
+    const dts=[];
+    const dt=new Date(hoje); dt.setDate(1);
+    while(dt.getMonth()===hoje.getMonth()){
+      if(dt.getDay()===2) dts.push(dt.toISOString().split("T")[0]);
+      dt.setDate(dt.getDate()+1);
+    }
+    return dts.filter((_,i)=>i===0||i===2); // 1ª e 3ª terças
+  }
+
+  // Seg/Qua/Sex do mês (marketing)
+  function diasMarketing(){
+    const dts=[];
+    const dt=new Date(hoje); dt.setDate(1);
+    while(dt.getMonth()===hoje.getMonth()){
+      const dow=dt.getDay();
+      if(dow===1||dow===3||dow===5) dts.push(dt.toISOString().split("T")[0]);
+      dt.setDate(dt.getDate()+1);
+    }
+    return dts;
+  }
+
+  const tarefas=[];
+  const mesKey=`${ano}-${mes}`;
+
+  // REINF — dia 10 (antecipa se fim de semana)
+  tarefas.push({title:"📊 REINF",category:"fiscal",priority:"urgente",due:dUtil(d(10)),client:"",notes:"Entrega REINF mensal",tipo_atividade:"guia",tempo_estimado:60,status_operacional:"pronto",permite_agendamento:true,recorrente_key:`reinf-${mesKey}`});
+
+  // PER/DCOMP — dia 10 (antecipa se fim de semana)
+  tarefas.push({title:"📊 PER/DCOMP",category:"fiscal",priority:"urgente",due:dUtil(d(10)),client:"",notes:"Entrega PER/DCOMP mensal",tipo_atividade:"guia",tempo_estimado:60,status_operacional:"pronto",permite_agendamento:true,recorrente_key:`perdcomp-${mesKey}`});
+
+  // Emissão de guias — dia 15
+  tarefas.push({title:"📋 Emissão de Guias FGTS/INSS",category:"dp",priority:"urgente",due:dUtil(d(15)),client:"",notes:"Todas as guias tratadas em conjunto",tipo_atividade:"guia",tempo_estimado:90,status_operacional:"pronto",permite_agendamento:true,recorrente_key:`guias-${mesKey}`});
+
+  // Recebimento de pontos — dia 25
+  tarefas.push({title:"📥 Recebimento de Pontos",category:"dp",priority:"alta",due:d(25),client:"",notes:"Período: 25 ao dia 01 — alertar se não recebido",tipo_atividade:"folha",tempo_estimado:30,status_operacional:"aguardando_info",permite_agendamento:false,recorrente_key:`recponto-${mesKey}`});
+
+  // Processamento de folha — dia 5 do mês seguinte
+  tarefas.push({title:"⚙️ Processamento de Folha",category:"dp",priority:"urgente",due:dProx(5),client:"",notes:"Fluxo: Recebimento → Processamento → Conferência → Envio",tipo_atividade:"folha",tempo_estimado:120,status_operacional:"aguardando_info",permite_agendamento:true,recorrente_key:`folha-${anoProx}-${mesProx}`});
+
+  // Convenções coletivas — quinzenal (dia 1 e 16)
+  tarefas.push({title:"⚖️ Convenções Coletivas",category:"dp",priority:"media",due:d(1),client:"",notes:"Verificar atualizações sindicais, pisos e cláusulas",tipo_atividade:"convencao",tempo_estimado:30,status_operacional:"pronto",permite_agendamento:true,recorrente_key:`convencao1-${mesKey}`});
+  tarefas.push({title:"⚖️ Convenções Coletivas",category:"dp",priority:"media",due:d(16),client:"",notes:"Verificar atualizações sindicais, pisos e cláusulas",tipo_atividade:"convencao",tempo_estimado:30,status_operacional:"pronto",permite_agendamento:true,recorrente_key:`convencao2-${mesKey}`});
+
+  // RFB — quinzenal, preferencialmente terças
+  const tercas=proximasTercas();
+  tercas.forEach((dt,i)=>{
+    tarefas.push({title:"🏛 Revisão Processos RFB",category:"fiscal",priority:"media",due:dt,client:"",notes:"Verificar andamento, status e exigências na Receita Federal",tipo_atividade:"processo_rfb",tempo_estimado:30,status_operacional:"pronto",permite_agendamento:true,recorrente_key:`rfb${i+1}-${mesKey}`});
+  });
+
+  // Alinhamento DP — mensal (1ª semana)
+  tarefas.push({title:"👥 Alinhamento DP — Mariana e Mirian",category:"dp",priority:"media",due:d(7),client:"Interno",notes:"Alinhamento operacional, pendências e melhorias de processo",tipo_atividade:"reuniao",tempo_estimado:60,status_operacional:"pronto",permite_agendamento:true,recorrente_key:`alinhDP-${mesKey}`});
+
+  // Planejamento de Marketing — mensal
+  tarefas.push({title:"📣 Planejamento de Marketing",category:"administrativo",priority:"baixa",due:d(5),client:"Interno",notes:"Definição de temas, campanhas e planejamento de conteúdo",tipo_atividade:"marketing",tempo_estimado:60,status_operacional:"pronto",permite_agendamento:true,recorrente_key:`mktplan-${mesKey}`});
+
+  // Parametrização — a cada 10 dias (dias 1, 11, 21)
+  [1,11,21].forEach(dia=>{
+    tarefas.push({title:"⚙️ Parametrização e Automação",category:"administrativo",priority:"media",due:d(dia),client:"Interno",notes:"Parametrizar sistema, criar automações, melhorar processos",tipo_atividade:"parametrizacao",tempo_estimado:60,status_operacional:"pronto",permite_agendamento:true,recorrente_key:`param${dia}-${mesKey}`});
+  });
+
+  // Marketing — Seg/Qua/Sex (apenas primeiras 4 semanas)
+  diasMarketing().slice(0,12).forEach((dt,i)=>{
+    tarefas.push({title:"📣 Postagem Instagram",category:"administrativo",priority:"baixa",due:dt,client:"Interno",notes:"Publicação de conteúdo — 10 minutos",tipo_atividade:"marketing",tempo_estimado:10,status_operacional:"pronto",permite_agendamento:true,recorrente_key:`mkt${i}-${mesKey}`});
+  });
+
+  return tarefas;
+}
+
+
 const PROCESS_TEMPLATES={
   folha:{label:"Folha de Pagamento",icon:"💼",category:"dp",color:"#6A1B9A",steps:[
     {title:"Aguardar informações do cliente (comissão, horas extras, adicional noturno, adiantamento, faltas)",priority:"alta",daysFromNow:0},
@@ -381,13 +471,28 @@ export default function App(){
   };
   const [form,setForm]=useState(emptyForm);
 
-  useEffect(()=>{fetchTasks();},[]);
+  useEffect(()=>{ fetchTasks(); criarRecorrentesDoMes(); },[]);
   useEffect(()=>{if(view==="fechamento"||view==="dashboard")fetchFechamento();},[view]);
 
   async function fetchTasks(){
     setLoading(true);
     const{data}=await supabase.from("tasks").select("*").order("due",{ascending:true});
     setTasks(data||[]);setLoading(false);
+  }
+
+  async function criarRecorrentesDoMes(){
+    const recorrentes=getRecorrentesDoMes();
+    // Buscar keys já existentes para não duplicar
+    const{data:exist}=await supabase.from("tasks").select("recorrente_key").not("recorrente_key","is",null);
+    const keysExist=new Set((exist||[]).map(r=>r.recorrente_key));
+    const novas=recorrentes.filter(t=>t.recorrente_key&&!keysExist.has(t.recorrente_key));
+    if(novas.length===0)return;
+    const hoje=new Date().toISOString().split("T")[0];
+    const payload=novas.map(t=>({...t,done:false,created_at:hoje,completed_at:null}));
+    await supabase.from("tasks").insert(payload);
+    // Recarregar tarefas silenciosamente
+    const{data}=await supabase.from("tasks").select("*").order("due",{ascending:true});
+    setTasks(data||[]);
   }
 
   async function fetchFechamento(){
@@ -1040,11 +1145,13 @@ export default function App(){
 function AgendaInteligente({tasks,pending,done,todayTasks,urgentesTab,comunsTab,weekDays,weekStart,weekTasksFor,mesDias,mesDateStr,mesTasksFor,mesNome,mesAno,mesOffset,setMesOffset,offsetInicio,todayStr,onToggle,onEdit,onDelete,S,in2days}){
   const [subView,setSubView]=useState("dia");
   const [agendaTab,setAgendaTab]=useState("urgentes");
+  const [dragAgendaIdx,setDragAgendaIdx]=useState(null);
+  const [agendaLocal,setAgendaLocal]=useState(null);
 
   const NM="#0F2040",NML="#E8EDF5",RD="#C41E3A",RDL="#FCEEF1",OW="#F8F7F4",OW2="#FFFFFF",BD="#E2E6EE",TX="#0F2040",TX2="#6B7A99",TX3="#A0AABF";
 
   // Gerar agenda inteligente do dia
-  const agendaDia = useMemo(()=>montarAgendaDia(tasks),[tasks]);
+  const agendaDia = useMemo(()=>{ setAgendaLocal(null); return montarAgendaDia(tasks); },[tasks]);
   const resumo = useMemo(()=>gerarResumoIA(tasks,agendaDia),[tasks,agendaDia]);
 
   const today=new Date();today.setHours(0,0,0,0);
@@ -1115,16 +1222,53 @@ function AgendaInteligente({tasks,pending,done,todayTasks,urgentesTab,comunsTab,
             <span style={{width:3,height:16,background:RD,borderRadius:2,display:"inline-block"}}/>
             Agenda Montada pela IA
           </div>
-          <div style={{background:OW2,borderRadius:12,border:`1px solid ${BD}`,overflow:"hidden"}}>
-            {agendaDia.map((item,i)=>{
+          <div style={{background:OW2,borderRadius:12,border:`1px solid ${BD}`,overflow:"hidden"}}
+            onDragOver={e=>e.preventDefault()}
+            onDrop={e=>{
+              e.preventDefault();
+              const fromIdx=Number(e.dataTransfer.getData("blocoIdx"));
+              if(isNaN(fromIdx))return;
+              const lista=agendaLocal||[...agendaDia];
+              const item=lista[fromIdx];
+              // Calcular posição baseada em Y
+              const rect=e.currentTarget.getBoundingClientRect();
+              const y=e.clientY-rect.top;
+              const toIdx=Math.min(Math.floor(y/(rect.height/lista.length)),lista.length-1);
+              if(fromIdx===toIdx)return;
+              const nova=[...lista];
+              nova.splice(fromIdx,1);
+              nova.splice(toIdx,0,item);
+              setAgendaLocal(nova);
+              setDragAgendaIdx(null);
+            }}>
+            {(agendaLocal||agendaDia).map((item,i)=>{
               const cat=item.cat?CATEGORIES[item.cat]:null;
               const corBorda=item.tipo==="ritual"?NM:item.tipo==="atendimento"?"#2E7D32":cat?.color||NM;
-              const bgItem=item.tipo==="ritual"?NML:item.tipo==="atendimento"?"#E8F5E9":cat?.bg||NML;
+              const isDrag=item.tipo==="tarefa";
+              const lista=agendaLocal||agendaDia;
               return(
-                <div key={i} style={{display:"flex",gap:0,borderBottom:i<agendaDia.length-1?`1px solid ${BD}`:"none"}}>
+                <div key={i}
+                  draggable={isDrag}
+                  onDragStart={e=>{if(isDrag){e.dataTransfer.setData("idx",String(i));setDragAgendaIdx(i);}}}
+                  onDragEnd={()=>setDragAgendaIdx(null)}
+                  onDragOver={e=>{e.preventDefault();e.currentTarget.style.background="#E8EDF5";}}
+                  onDragLeave={e=>{e.currentTarget.style.background="";}}
+                  onDrop={e=>{
+                    e.preventDefault();
+                    e.currentTarget.style.background="";
+                    const from=Number(e.dataTransfer.getData("idx"));
+                    if(isNaN(from)||from===i)return;
+                    const nova=[...lista];
+                    const [moved]=nova.splice(from,1);
+                    nova.splice(i,0,moved);
+                    setAgendaLocal(nova);
+                    setDragAgendaIdx(null);
+                  }}
+                  style={{display:"flex",gap:0,borderBottom:i<lista.length-1?`1px solid ${BD}`:"none",opacity:dragAgendaIdx===i?0.4:1,transition:"opacity .15s",cursor:isDrag?"grab":"default"}}>
                   <div style={{width:72,padding:"12px 10px 12px 14px",borderRight:`1px solid ${BD}`,flexShrink:0}}>
                     <div style={{fontSize:12,fontWeight:700,color:TX}}>{item.hora}</div>
                     <div style={{fontSize:10,color:TX3,marginTop:1}}>{item.horaFim}</div>
+                    {isDrag&&<div style={{fontSize:9,color:TX3,marginTop:2,textAlign:"center"}}>⠿</div>}
                   </div>
                   <div style={{flex:1,padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderLeft:`3px solid ${corBorda}`,background:i%2===0?"#FAFBFD":OW2}}>
                     <div style={{flex:1}}>
@@ -1137,9 +1281,15 @@ function AgendaInteligente({tasks,pending,done,todayTasks,urgentesTab,comunsTab,
                         {item.obs&&<span style={{fontSize:9.5,color:TX3,fontStyle:"italic"}}>{item.obs}</span>}
                       </div>
                     </div>
-                    {item.tipo==="tarefa"&&<span style={{fontSize:9.5,background:NML,color:NM,borderRadius:5,padding:"2px 7px",fontWeight:600,flexShrink:0}}>
-                      {Math.round(toMin(item.horaFim)-toMin(item.hora))}min
-                    </span>}
+                    <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:5,flexShrink:0}}>
+                      {item.tipo==="tarefa"&&<span style={{fontSize:9.5,background:NML,color:NM,borderRadius:5,padding:"2px 7px",fontWeight:600}}>
+                        {Math.round(toMin(item.horaFim)-toMin(item.hora))}min
+                      </span>}
+                      {isDrag&&item.id&&<div style={{display:"flex",gap:4}}>
+                        <span onClick={e=>{e.stopPropagation();const t=tasks?.find(x=>x.id===item.id);if(t)onEdit(t);}} style={{cursor:"pointer",fontSize:11,color:TX3}} title="Editar">✏️</span>
+                        <span onClick={e=>{e.stopPropagation();const t=tasks?.find(x=>x.id===item.id);if(t)onToggle(t);}} style={{cursor:"pointer",fontSize:11,color:"#1B6B3A"}} title="Concluir">✓</span>
+                      </div>}
+                    </div>
                   </div>
                 </div>
               );
